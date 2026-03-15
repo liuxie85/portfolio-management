@@ -1,0 +1,16 @@
+# 敏感配置（含飞书密钥、API Key）
+config.json
+
+# 本地缓存
+.data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# 测试/IDE
+.pytest_cache/
+.DS_Store
+.vscode/
