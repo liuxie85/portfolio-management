@@ -75,7 +75,7 @@ class FeishuStorage:
                 'price': False,
                 'amount': False,
                 'fee': False,
-                'tax': False,
+                # Note: 'tax' 字段飞书表中可能不存在，作为可选字段处理
             },
             'cash_flow': {
                 'amount': False,
@@ -735,15 +735,18 @@ class FeishuStorage:
             'amount': tx.amount or (tx.quantity * tx.price),
             'currency': tx.currency,
             'fee': tx.fee,
-            'tax': tx.tax,
             'related_account': tx.related_account,
             'remark': tx.remark,
             'source': tx.source,
         }
+        # 可选字段：飞书表中可能不存在这些字段
         if tx.request_id:
             result['request_id'] = tx.request_id
         if tx.dedup_key:
             result['dedup_key'] = tx.dedup_key
+        # tax 字段：仅当值有效时写入（飞书表可能不存在此字段）
+        if tx.tax and tx.tax > 0:
+            result['tax'] = tx.tax
         return result
 
     def _dict_to_transaction(self, data: Dict) -> Transaction:
