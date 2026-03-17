@@ -628,6 +628,14 @@ class PortfolioManager:
         # -- 累计资产升值 --
         cumulative_appreciation = (total_value - initial_value - cumulative_cash_flow) if initial_value else 0.0
 
+        # -- CAGR (复合年增长率) --
+        cagr = 0.0
+        if first_year_data and first_year_data['prev_end'] and first_year_data['prev_end'].nav > 0 and nav > 0:
+            days_since_start = (today - first_year_data['prev_end'].date).days
+            years_since_start = days_since_start / 365.25
+            if years_since_start > 0:
+                cagr = (nav / first_year_data['prev_end'].nav) ** (1 / years_since_start) - 1
+
         return dict(
             shares=shares, shares_change=shares_change, nav=nav,
             month_nav_change=month_nav_change, year_nav_change=year_nav_change,
@@ -637,6 +645,7 @@ class PortfolioManager:
             cumulative_appreciation=cumulative_appreciation,
             initial_value=initial_value,
             first_year_data=first_year_data,
+            cagr=cagr,
         )
 
     def _build_nav_record(
@@ -649,6 +658,7 @@ class PortfolioManager:
         cumulative_nav_change, daily_appreciation,
         month_appreciation, year_appreciation,
         cumulative_appreciation, initial_value, first_year_data,
+        cagr=0.0,
     ) -> NAVHistory:
         """构建 NAVHistory 对象（含 details 字典）"""
         # details 保留各年份明细和累计数据
@@ -659,6 +669,8 @@ class PortfolioManager:
             'cumulative_appreciation': round(cumulative_appreciation, 2),
             'initial_value': initial_value,
             'cumulative_cash_flow': cumulative_cash_flow,
+            'cagr': round(cagr, 6),
+            'cagr_pct': round(cagr * 100, 2),
         }
         for yr_str, yd in yearly_data.items():
             details[f'nav_change_{yr_str}'] = round(yd.get('nav_change', 0), 6)
@@ -699,7 +711,7 @@ class PortfolioManager:
         cumulative_nav_change, daily_appreciation,
         month_appreciation, year_appreciation,
         cumulative_appreciation, initial_value, first_year_data,
-        cumulative_cash_flow=0, daily_cash_flow=0, monthly_cash_flow=0, **_extra,
+        cumulative_cash_flow=0, daily_cash_flow=0, monthly_cash_flow=0, cagr=0.0, **_extra,
     ):
         """打印净值摘要（类似Excel格式）"""
         print(f"\n净值记录已保存 ({today}):")
@@ -719,6 +731,8 @@ class PortfolioManager:
                 print(f"  {yr_str}年净值涨幅: {yd['nav_change']*100:.2f}%")
         if first_year_data and first_year_data['prev_end']:
             print(f"  累计净值涨幅({start_year}起): {cumulative_nav_change*100:.2f}%")
+            if cagr != 0.0:
+                print(f"  成立以来年化收益(CAGR): {cagr*100:.2f}%")
         if initial_value:
             print(f"  累计资产升值: ¥{cumulative_appreciation:,.2f} ({total_value:,.0f} - {initial_value:,.0f} - {cumulative_cash_flow:,.0f})")
 

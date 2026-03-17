@@ -820,6 +820,8 @@ class PortfolioSkill:
                 "pnl": nav.get("pnl"),
                 "cash_flow": nav.get("cash_flow"),
                 "top_holdings": full.get("top_holdings"),
+                "cagr": nav_details.get("cagr"),
+                "cagr_pct": nav_details.get("cagr_pct"),
             }
 
         elif report_type == "monthly":
@@ -835,6 +837,8 @@ class PortfolioSkill:
                 "mtd_pnl": nav.get("mtd_pnl"),
                 "top_holdings": full.get("top_holdings"),
                 "distribution": full.get("distribution"),
+                "cagr": nav_details.get("cagr"),
+                "cagr_pct": nav_details.get("cagr_pct"),
             }
 
         elif report_type == "yearly":
