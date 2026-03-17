@@ -7,6 +7,8 @@
 from datetime import datetime, timedelta
 import pytz
 
+from .models import MarketType
+
 
 class MarketTimeUtil:
     """市场交易时间工具"""
@@ -262,7 +264,7 @@ class MarketTimeUtil:
         return int((next_update - now).total_seconds())
 
     @classmethod
-    def get_cache_ttl(cls, market_type: str) -> int:
+    def get_cache_ttl(cls, market_type) -> int:
         """根据市场类型和当前时间获取缓存有效期(秒)
 
         策略：
@@ -270,32 +272,35 @@ class MarketTimeUtil:
         - 非交易时间：缓存到下次开盘前
 
         Args:
-            market_type: 'cn' (A股), 'hk' (港股), 'us' (美股), 'fund' (基金)
+            market_type: MarketType 枚举或字符串 'cn' (A股), 'hk' (港股), 'us' (美股), 'fund' (基金)
 
         Returns:
             缓存有效期秒数
         """
         now = datetime.now(cls.TZ_SHANGHAI)
 
-        if market_type == 'cn':
+        # 支持 MarketType 枚举和字符串（向后兼容）
+        market_key = market_type.value if isinstance(market_type, MarketType) else market_type
+
+        if market_key == MarketType.CN:
             if cls.is_cn_market_open(now):
                 return 1800
             else:
                 return cls._seconds_until_next_cn_open(now)
 
-        elif market_type == 'hk':
+        elif market_key == MarketType.HK:
             if cls.is_hk_market_open(now):
                 return 1800
             else:
                 return cls._seconds_until_next_hk_open(now)
 
-        elif market_type == 'us':
+        elif market_key == MarketType.US:
             if cls.is_us_market_open(now):
                 return 1800
             else:
                 return cls._seconds_until_next_us_open(now)
 
-        elif market_type == 'fund':
+        elif market_key == MarketType.FUND:
             return cls._seconds_until_next_fund_update(now)
 
         else:

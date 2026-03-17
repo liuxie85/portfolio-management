@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .models import AssetType, PriceCache
+from .models import AssetType, PriceCache, DATETIME_FORMAT
 
 # 默认缓存文件路径
 PRICE_CACHE_FILE = Path(__file__).parent.parent / '.data' / 'price_cache.json'
@@ -33,14 +33,16 @@ class LocalPriceCache:
         self._load()
 
     def _load_unlocked(self):
-        """从文件加载缓存（无锁版本，需在锁内调用）"""
-        if self.cache_file.exists():
-            try:
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    self._cache = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self._cache = {}
-        else:
+        """从文件加载缓存（无锁版本，需在锁内调用）
+
+        使用 EAFP 模式避免 TOCTOU 竞争条件
+        """
+        try:
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                self._cache = json.load(f)
+        except FileNotFoundError:
+            self._cache = {}
+        except (json.JSONDecodeError, IOError):
             self._cache = {}
 
     def _load(self):
@@ -66,7 +68,7 @@ class LocalPriceCache:
 
             # 检查过期时间
             expires_at = data.get('expires_at', '')
-            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            now = datetime.now().strftime(DATETIME_FORMAT)
 
             if expires_at and expires_at < now:
                 self._delete_unlocked(asset_id)
@@ -91,7 +93,7 @@ class LocalPriceCache:
         expires_at_str = None
         if price.expires_at:
             if isinstance(price.expires_at, datetime):
-                expires_at_str = price.expires_at.strftime('%Y-%m-%d %H:%M:%S')
+                expires_at_str = price.expires_at.strftime(DATETIME_FORMAT)
             else:
                 expires_at_str = price.expires_at
 
@@ -108,7 +110,7 @@ class LocalPriceCache:
                 'exchange_rate': price.exchange_rate,
                 'data_source': price.data_source,
                 'expires_at': expires_at_str,
-                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'updated_at': datetime.now().strftime(DATETIME_FORMAT)
             }
             self._save_unlocked()
 
@@ -127,7 +129,7 @@ class LocalPriceCache:
         """获取所有未过期的价格缓存 - 线程安全"""
         with self._lock:
             results = []
-            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            now = datetime.now().strftime(DATETIME_FORMAT)
             expired_ids = []
 
             cache_items = list(self._cache.items())
@@ -166,7 +168,7 @@ class LocalPriceCache:
     def clear_expired(self):
         """清理所有过期缓存 - 线程安全"""
         with self._lock:
-            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            now = datetime.now().strftime(DATETIME_FORMAT)
             expired_ids = [
                 asset_id for asset_id, data in self._cache.items()
                 if data.get('expires_at') and data['expires_at'] < now

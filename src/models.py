@@ -16,6 +16,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, Dict, List, Any
 
 
+# ========== 常量 ==========
+
+# 日期时间格式常量
+DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+# 现金资产ID常量
+CASH_ASSET_ID = "CNY-CASH"      # 人民币现金
+MMF_ASSET_ID = "CNY-MMF"        # 货币基金
+USD_CASH_ASSET_ID = "USD-CASH"  # 美元现金
+HKD_CASH_ASSET_ID = "HKD-CASH"  # 港币现金
+
+# 现金资产ID集合（用于快速判断）
+CASH_ASSET_IDS = {CASH_ASSET_ID, MMF_ASSET_ID, USD_CASH_ASSET_ID, HKD_CASH_ASSET_ID}
+
+
 # ========== 枚举类型 ==========
 
 class AssetType(str, Enum):
@@ -29,6 +44,21 @@ class AssetType(str, Enum):
     CRYPTO = "crypto"
     BOND = "bond"
     OTHER = "other"
+
+
+class Currency(str, Enum):
+    """币种枚举"""
+    CNY = "CNY"  # 人民币
+    USD = "USD"  # 美元
+    HKD = "HKD"  # 港币
+
+
+class MarketType(str, Enum):
+    """市场类型枚举（用于缓存 TTL 计算）"""
+    CN = "cn"      # A股
+    HK = "hk"      # 港股
+    US = "us"      # 美股
+    FUND = "fund"  # 基金
 
 
 class AssetClass(str, Enum):

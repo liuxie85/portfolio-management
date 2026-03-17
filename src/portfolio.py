@@ -6,7 +6,8 @@ from typing import Any, Dict, Optional
 
 from .models import (
     Holding, Transaction, CashFlow, NAVHistory,
-    PortfolioValuation, AssetType, TransactionType, AssetClass
+    PortfolioValuation, AssetType, TransactionType, AssetClass,
+    CASH_ASSET_ID, MMF_ASSET_ID
 )
 from .price_fetcher import PriceFetcher
 from . import config
@@ -240,12 +241,13 @@ class PortfolioManager:
     def _update_cash_holding(self, account: str, amount: float, currency: str, cny_amount: float):
         """更新现金持仓（旧版方法，保持兼容）"""
         # 根据币种确定资产ID
-        if currency == 'CNY':
-            asset_id = 'CNY-CASH'
-        elif currency == 'USD':
-            asset_id = 'USD-CASH'
-        elif currency == 'HKD':
-            asset_id = 'HKD-CASH'
+        from .models import Currency, USD_CASH_ASSET_ID, HKD_CASH_ASSET_ID
+        if currency == Currency.CNY:
+            asset_id = CASH_ASSET_ID
+        elif currency == Currency.USD:
+            asset_id = USD_CASH_ASSET_ID
+        elif currency == Currency.HKD:
+            asset_id = HKD_CASH_ASSET_ID
         else:
             asset_id = f'{currency}-CASH'
 
@@ -271,7 +273,7 @@ class PortfolioManager:
     def _deduct_cash(self, account: str, amount: float) -> bool:
         """
         扣减现金
-        逻辑：先扣 CNY-CASH，不足部分扣 CNY-MMF
+        逻辑：先扣 CASH_ASSET_ID，不足部分扣 MMF_ASSET_ID
         返回：是否成功
         """
         if amount <= 0:
@@ -279,22 +281,23 @@ class PortfolioManager:
 
         remaining = amount
 
-        # 1. 先扣现金 (CNY-CASH)
-        cash_holding = self.storage.get_holding('CNY-CASH', account)
+        # 一次性获取两个持仓，减少 API 调用
+        cash_holding = self.storage.get_holding(CASH_ASSET_ID, account)
+        mmf_holding = self.storage.get_holding(MMF_ASSET_ID, account)
+
+        # 1. 先扣现金 (CASH_ASSET_ID)
         if cash_holding and cash_holding.quantity > 0:
             deduct_from_cash = min(cash_holding.quantity, remaining)
-            self.storage.update_holding_quantity('CNY-CASH', account, -deduct_from_cash)
+            self.storage.update_holding_quantity(CASH_ASSET_ID, account, -deduct_from_cash)
             remaining -= deduct_from_cash
-            print(f"  从 CNY-CASH 扣除: ¥{deduct_from_cash:,.2f}")
+            print(f"  从 {CASH_ASSET_ID} 扣除: ¥{deduct_from_cash:,.2f}")
 
-        # 2. 如果还不够，扣货币基金 (CNY-MMF)
-        if remaining > 0:
-            mmf_holding = self.storage.get_holding('CNY-MMF', account)
-            if mmf_holding and mmf_holding.quantity > 0:
-                deduct_from_mmf = min(mmf_holding.quantity, remaining)
-                self.storage.update_holding_quantity('CNY-MMF', account, -deduct_from_mmf)
-                remaining -= deduct_from_mmf
-                print(f"  从 CNY-MMF 扣除: ¥{deduct_from_mmf:,.2f}")
+        # 2. 如果还不够，扣货币基金 (MMF_ASSET_ID)
+        if remaining > 0 and mmf_holding and mmf_holding.quantity > 0:
+            deduct_from_mmf = min(mmf_holding.quantity, remaining)
+            self.storage.update_holding_quantity(MMF_ASSET_ID, account, -deduct_from_mmf)
+            remaining -= deduct_from_mmf
+            print(f"  从 {MMF_ASSET_ID} 扣除: ¥{deduct_from_mmf:,.2f}")
 
         # 3. 检查是否扣完
         if remaining > 0:
@@ -306,27 +309,23 @@ class PortfolioManager:
     def _has_sufficient_cash(self, account: str, amount: float) -> bool:
         """
         检查现金是否充足（仅检查，不扣减）
-        逻辑：先检查 CNY-CASH，再检查 CNY-MMF
+        逻辑：先检查 CASH_ASSET_ID，再检查 MMF_ASSET_ID
         返回：是否充足
         """
         if amount <= 0:
             return True
 
-        remaining = amount
+        # 一次性获取两个持仓，减少 API 调用
+        cash_holding = self.storage.get_holding(CASH_ASSET_ID, account)
+        mmf_holding = self.storage.get_holding(MMF_ASSET_ID, account)
 
-        # 1. 检查现金 (CNY-CASH)
-        cash_holding = self.storage.get_holding('CNY-CASH', account)
+        total_cash = 0.0
         if cash_holding and cash_holding.quantity > 0:
-            remaining -= cash_holding.quantity
+            total_cash += cash_holding.quantity
+        if mmf_holding and mmf_holding.quantity > 0:
+            total_cash += mmf_holding.quantity
 
-        # 2. 如果还不够，检查货币基金 (CNY-MMF)
-        if remaining > 0:
-            mmf_holding = self.storage.get_holding('CNY-MMF', account)
-            if mmf_holding and mmf_holding.quantity > 0:
-                remaining -= mmf_holding.quantity
-
-        # 3. 返回是否足够
-        return remaining <= 0
+        return total_cash >= amount
 
     def _add_cash(self, account: str, amount: float) -> bool:
         """
@@ -336,15 +335,15 @@ class PortfolioManager:
         if amount <= 0:
             return True
 
-        cash_holding = self.storage.get_holding('CNY-CASH', account)
+        cash_holding = self.storage.get_holding(CASH_ASSET_ID, account)
 
         if cash_holding:
             # 增加现有现金持仓
-            self.storage.update_holding_quantity('CNY-CASH', account, amount)
+            self.storage.update_holding_quantity(CASH_ASSET_ID, account, amount)
         else:
             # 新建现金持仓
             holding = Holding(
-                asset_id='CNY-CASH',
+                asset_id=CASH_ASSET_ID,
                 asset_name='人民币现金',
                 asset_type=AssetType.CASH,
                 account=account,
@@ -355,7 +354,7 @@ class PortfolioManager:
             )
             self.storage.upsert_holding(holding)
 
-        print(f"  增加到 CNY-CASH: ¥{amount:,.2f}")
+        print(f"  增加到 {CASH_ASSET_ID}: ¥{amount:,.2f}")
         return True
 
     # ========== 估值计算 ==========
@@ -487,7 +486,7 @@ class PortfolioManager:
         yesterday_nav = self._find_latest_nav_before(all_navs, today)
         prev_year_end_nav = self._find_year_end_nav(all_navs, str(today.year - 1))
         prev_month_end_nav = self._find_prev_month_end_nav(all_navs, today.year, today.month)
-        last_nav = self._find_latest_nav_before(all_navs, today)
+        last_nav = yesterday_nav  # 直接引用，避免重复计算
 
         # 各年份数据（动态：从 start_year 到当前年份）
         yearly_data = {}

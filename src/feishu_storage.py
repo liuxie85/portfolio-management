@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from .models import (
     Holding, Transaction, CashFlow, NAVHistory, PriceCache,
     AssetType, TransactionType, AssetClass, Industry,
-    make_tx_dedup_key, make_cf_dedup_key
+    make_tx_dedup_key, make_cf_dedup_key, DATETIME_FORMAT
 )
 from .feishu_client import FeishuClient
 from .local_cache import LocalPriceCache
@@ -376,7 +376,7 @@ class FeishuStorage:
                     new_quantity = existing.quantity + holding.quantity
                     update_fields = {
                         'quantity': new_quantity,
-                        'updated_at': now.strftime('%Y-%m-%d %H:%M:%S')
+                        'updated_at': now.strftime(DATETIME_FORMAT)
                     }
 
                     # 更新名称（如果新名称更完整）
@@ -413,7 +413,7 @@ class FeishuStorage:
             new_quantity = existing.quantity + holding.quantity
             update_fields = {
                 'quantity': new_quantity,
-                'updated_at': now.strftime('%Y-%m-%d %H:%M:%S')
+                'updated_at': now.strftime(DATETIME_FORMAT)
             }
 
             # 更新名称（如果新名称更完整）
@@ -504,9 +504,9 @@ class FeishuStorage:
         # 处理时间戳
         now = datetime.now()
         if holding.created_at:
-            result['created_at'] = holding.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            result['created_at'] = holding.created_at.strftime(DATETIME_FORMAT)
         if holding.updated_at:
-            result['updated_at'] = holding.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+            result['updated_at'] = holding.updated_at.strftime(DATETIME_FORMAT)
 
         return result
 
@@ -520,13 +520,13 @@ class FeishuStorage:
 
         if data.get('created_at'):
             try:
-                created_at = datetime.strptime(data['created_at'], '%Y-%m-%d %H:%M:%S')
+                created_at = datetime.strptime(data['created_at'], DATETIME_FORMAT)
             except (ValueError, TypeError):
                 pass
 
         if data.get('updated_at'):
             try:
-                updated_at = datetime.strptime(data['updated_at'], '%Y-%m-%d %H:%M:%S')
+                updated_at = datetime.strptime(data['updated_at'], DATETIME_FORMAT)
             except (ValueError, TypeError):
                 pass
 
