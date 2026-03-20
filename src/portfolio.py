@@ -551,6 +551,10 @@ class PortfolioManager:
         warnings.extend(normalization_warnings)
         warnings.extend(price_errors)
 
+        warnings = []
+        warnings.extend(normalization_warnings)
+        warnings.extend(price_errors)
+
         return PortfolioValuation(
             account=account,
             total_value_cny=float(self._quantize_money(total_value_cny)),

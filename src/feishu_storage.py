@@ -1165,7 +1165,6 @@ class FeishuStorage:
             'share_change': nav.share_change,
             'mtd_nav_change': nav.mtd_nav_change,
             'ytd_nav_change': nav.ytd_nav_change,
-            'pnl': nav.pnl,
             'mtd_pnl': nav.mtd_pnl,
             'ytd_pnl': nav.ytd_pnl,
             'details': nav.details,
