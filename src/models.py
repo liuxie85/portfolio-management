@@ -11,8 +11,9 @@
 """
 import hashlib
 from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Optional, Dict, List, Any
 
 
@@ -20,6 +21,17 @@ from typing import Optional, Dict, List, Any
 
 # 日期时间格式常量
 DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+MONEY_QUANT = Decimal('0.01')
+NAV_QUANT = Decimal('0.000001')
+WEIGHT_QUANT = Decimal('0.000001')
+
+
+def _quantize_decimal(value: Any, quant: Decimal) -> Optional[float]:
+    if value is None:
+        return None
+    return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
+
 
 # 现金资产ID常量
 CASH_ASSET_ID = "CNY-CASH"      # 人民币现金
@@ -135,6 +147,11 @@ class Holding(BaseModel):
     def coerce_market(cls, v):
         return v if v is not None else ""
 
+    @field_validator('avg_cost', mode='before')
+    @classmethod
+    def quantize_avg_cost(cls, v):
+        return _quantize_decimal(v, MONEY_QUANT)
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -172,16 +189,24 @@ class Transaction(BaseModel):
     def coerce_market(cls, v):
         return v if v is not None else ""
 
+    @field_validator('price', 'fee', 'tax', mode='before')
+    @classmethod
+    def quantize_money_fields(cls, v):
+        return _quantize_decimal(v, MONEY_QUANT)
+
     @field_validator('amount', mode='before')
     @classmethod
     def calculate_amount(cls, v, info):
-        """自动计算成交金额"""
+        """优先量化显式传入的 amount；自动计算在 model_validator 中兜底。"""
         if v is not None:
-            return v
-        data = info.data
-        if 'quantity' in data and 'price' in data:
-            return data['quantity'] * data['price']
+            return _quantize_decimal(v, MONEY_QUANT)
         return None
+
+    @model_validator(mode='after')
+    def fill_amount(self):
+        if self.amount is None and self.quantity is not None and self.price is not None:
+            self.amount = _quantize_decimal(Decimal(str(self.quantity)) * Decimal(str(self.price)), MONEY_QUANT)
+        return self
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -205,6 +230,11 @@ class CashFlow(BaseModel):
     source: Optional[str] = None
     remark: Optional[str] = None
 
+    @field_validator('amount', 'cny_amount', mode='before')
+    @classmethod
+    def quantize_money_fields(cls, v):
+        return _quantize_decimal(v, MONEY_QUANT)
+
 
 class PriceCache(BaseModel):
     """价格缓存
@@ -225,6 +255,11 @@ class PriceCache(BaseModel):
     exchange_rate: Optional[float] = None
     data_source: Optional[str] = None
     expires_at: Optional[datetime] = None
+
+    @field_validator('price', 'cny_price', mode='before')
+    @classmethod
+    def quantize_price_fields(cls, v):
+        return _quantize_decimal(v, MONEY_QUANT)
 
 
 class NAVHistory(BaseModel):
@@ -274,6 +309,26 @@ class NAVHistory(BaseModel):
     # 扩展计算数据（各年份明细等）
     details: Optional[Dict[str, Any]] = None
 
+    @field_validator(
+        'total_value', 'cash_value', 'stock_value', 'fund_value',
+        'cn_stock_value', 'us_stock_value', 'hk_stock_value',
+        'shares', 'cash_flow', 'share_change', 'pnl', 'mtd_pnl', 'ytd_pnl',
+        mode='before'
+    )
+    @classmethod
+    def quantize_money_fields(cls, v):
+        return _quantize_decimal(v, MONEY_QUANT)
+
+    @field_validator('nav', 'mtd_nav_change', 'ytd_nav_change', mode='before')
+    @classmethod
+    def quantize_nav_fields(cls, v):
+        return _quantize_decimal(v, NAV_QUANT)
+
+    @field_validator('stock_weight', 'cash_weight', mode='before')
+    @classmethod
+    def quantize_weight_fields(cls, v):
+        return _quantize_decimal(v, WEIGHT_QUANT)
+
 
 class PortfolioValuation(BaseModel):
     """组合估值结果（运行时计算，不持久化）"""
@@ -298,6 +353,23 @@ class PortfolioValuation(BaseModel):
 
     # 持仓明细
     holdings: List[Holding] = Field(default_factory=list)
+
+    # 估值告警（如分类兜底、价格缺失、缓存回退等）
+    warnings: List[str] = Field(default_factory=list)
+
+    @field_validator(
+        'total_value_cny', 'cash_value_cny', 'stock_value_cny', 'fund_value_cny',
+        'cn_asset_value', 'us_asset_value', 'hk_asset_value', 'shares',
+        mode='before'
+    )
+    @classmethod
+    def quantize_money_fields(cls, v):
+        return _quantize_decimal(v, MONEY_QUANT)
+
+    @field_validator('nav', mode='before')
+    @classmethod
+    def quantize_nav_field(cls, v):
+        return _quantize_decimal(v, NAV_QUANT)
 
     @property
     def cash_ratio(self) -> float:

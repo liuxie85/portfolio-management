@@ -196,17 +196,18 @@ class TestPriceFetcher:
         assert result["name"] == "腾讯控股"
         assert result["currency"] == "HKD"
 
-    @patch.object(PriceFetcher, '_fetch_us_stock_yahoo_api')
-    def test_fetch_us_stock_success(self, mock_yahoo):
+    @patch.object(PriceFetcher, '_fetch_us_stock_finnhub', return_value=None)
+    @patch.object(PriceFetcher, '_retry_with_backoff')
+    def test_fetch_us_stock_success(self, mock_retry, mock_finnhub):
         """测试获取美股价格成功"""
-        mock_yahoo.return_value = {
+        mock_retry.return_value = {
             "code": "AAPL",
             "name": "Apple Inc",
             "price": 175.0,
             "change": 2.5,
             "change_pct": 0.0145,
             "currency": "USD",
-            "source": "yfinance"
+            "source": "yahoo_api"
         }
 
         fetcher = PriceFetcher()
@@ -215,7 +216,7 @@ class TestPriceFetcher:
         assert result is not None
         assert result["price"] == 175.0
         assert result["currency"] == "USD"
-        assert result["source"] == "yfinance"
+        assert result["source"] == "yahoo_api"
 
     def test_get_cash_price(self):
         """测试获取现金价格"""

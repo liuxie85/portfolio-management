@@ -1,6 +1,7 @@
 """测试组合管理器"""
 import pytest
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import Mock, patch, MagicMock
 
 from src.portfolio import PortfolioManager
@@ -610,9 +611,9 @@ class TestPortfolioManagerValuation:
         # 检查持仓权重
         for holding in result.holdings:
             if holding.asset_id == '000001':
-                assert holding.weight == 10500.0 / 50500.0
+                assert holding.weight == round(10500.0 / 50500.0, 6)
             elif holding.asset_id == '00700':
-                assert holding.weight == 40000.0 / 50500.0
+                assert holding.weight == round(40000.0 / 50500.0, 6)
 
 
 class TestPortfolioManagerAssetDistribution:
@@ -739,6 +740,10 @@ class TestPortfolioManagerNAVRecord:
         assert result.total_value == 1000000.0
         assert result.shares == 1000000.0  # 首次，份额=净值
         assert result.nav == 1.0
+        assert result.mtd_nav_change is None
+        assert result.ytd_nav_change is None
+        assert result.mtd_pnl is None
+        assert result.ytd_pnl is None
 
     def test_record_nav_with_existing(self):
         """测试已有净值记录"""
@@ -783,19 +788,8 @@ class TestPortfolioManagerNAVRecord:
             nav=1.0,
             shares=1000000.0
         )
-        self.mock_storage.get_latest_nav_before.return_value = existing_nav
-        # 模拟当日入金5万 (side_effect 按调用顺序返回)
-        # 调用顺序: daily, yearly(2025), yearly(2024), yearly(2025), cumulative(2024), yearly(2024), yearly(2025)
         deposit = CashFlow(flow_date=date(2025, 3, 14), account='测试账户', amount=50000, currency='CNY', cny_amount=50000, flow_type='DEPOSIT')
-        self.mock_storage.get_cash_flows.side_effect = [
-            [deposit],   # daily
-            [deposit],   # yearly 2025
-            [],          # yearly 2024
-            [deposit],   # yearly 2025 again
-            [deposit],   # cumulative from 2024
-            [],          # yearly 2024 (again for appreciation calc)
-            [deposit]    # yearly 2025 (again for appreciation calc)
-        ]
+        self.mock_storage.get_cash_flows.return_value = [deposit]
         self.mock_storage.save_nav.return_value = None
         self.mock_storage.get_nav_history.return_value = [existing_nav]
 
@@ -805,6 +799,7 @@ class TestPortfolioManagerNAVRecord:
         assert result.shares == 1050000.0
         # 净值 = 1050000 / 1050000 = 1.0
         assert result.nav == 1.0
+        self.mock_storage.get_cash_flows.assert_called_once()
 
     def test_get_last_day_nav(self):
         """测试获取昨日净值"""
@@ -814,7 +809,7 @@ class TestPortfolioManagerNAVRecord:
             total_value=1000000.0,
             nav=1.0
         )
-        self.mock_storage.get_latest_nav_before.return_value = yesterday_nav
+        self.mock_storage.get_nav_on_date.return_value = yesterday_nav
 
         result = self.manager._get_last_day_nav('测试账户', date(2025, 3, 14))
 
@@ -831,6 +826,31 @@ class TestPortfolioManagerNAVRecord:
         result = self.manager._get_daily_cash_flow('测试账户', date(2025, 3, 14))
 
         assert result == 40000.0  # 50000 - 10000
+
+    def test_summarize_cash_flows(self):
+        """测试 record_nav 资金变动一次取数后内存汇总"""
+        flows = [
+            CashFlow(flow_date=date(2024, 12, 31), account='测试账户', amount=10000, currency='CNY', cny_amount=10000, flow_type='DEPOSIT'),
+            CashFlow(flow_date=date(2025, 3, 1), account='测试账户', amount=20000, currency='CNY', cny_amount=20000, flow_type='DEPOSIT'),
+            CashFlow(flow_date=date(2025, 3, 14), account='测试账户', amount=5000, currency='CNY', cny_amount=5000, flow_type='DEPOSIT'),
+        ]
+        self.mock_storage.get_cash_flows.return_value = flows
+        last_nav = NAVHistory(date=date(2025, 3, 13), account='测试账户', total_value=1000000.0, nav=1.0, shares=1000000.0)
+
+        result = self.manager._summarize_cash_flows(
+            account='测试账户',
+            today=date(2025, 3, 14),
+            start_year=2024,
+            last_nav=last_nav,
+        )
+
+        assert result['daily'] == 5000
+        assert result['monthly'] == 25000
+        assert result['yearly']['2024'] == 10000
+        assert result['yearly']['2025'] == 25000
+        assert result['cumulative'] == 35000
+        assert result['gap'] == 5000
+        self.mock_storage.get_cash_flows.assert_called_once_with('测试账户', date(2024, 1, 1), date(2025, 3, 14))
 
     def test_get_yearly_cash_flow(self):
         """测试获取当年资金变动"""
@@ -861,6 +881,101 @@ class TestPortfolioManagerNAVRecord:
         result = self.manager._get_initial_value('测试账户')
 
         assert result == 2317869.76  # 默认值
+
+    def test_calc_period_return(self):
+        """测试通用区间收益率计算"""
+        assert self.manager._calc_period_return(1.1, 1.0) == 0.1
+        assert self.manager._calc_period_return(1.1, None) == 0.0
+        assert self.manager._calc_period_return(1.1, 0) == 0.0
+
+    def test_calc_period_metrics_return_none_without_base(self):
+        """测试缺基准时月/年收益与升值返回 None，而不是 0"""
+        assert self.manager._calc_mtd_nav_change(1.1, None) is None
+        assert self.manager._calc_ytd_nav_change(1.1, None) is None
+        assert self.manager._calc_mtd_pnl(1000.0, None, 0.0) is None
+        assert self.manager._calc_ytd_pnl(1000.0, None, 0.0) is None
+
+    def test_decimal_quantize_helpers(self):
+        """测试 Decimal 量化规则稳定"""
+        assert self.manager._quantize_money('1.005') == Decimal('1.01')
+        assert self.manager._quantize_nav('1.1234567') == Decimal('1.123457')
+        assert self.manager._quantize_weight('0.3333336') == Decimal('0.333334')
+
+    def test_nav_lookup_index(self):
+        """测试 NAV 预索引查询结果正确"""
+        navs = [
+            NAVHistory(date=date(2024, 12, 31), account='测试账户', total_value=100.0, nav=1.0),
+            NAVHistory(date=date(2025, 1, 2), account='测试账户', total_value=101.0, nav=1.01),
+            NAVHistory(date=date(2025, 2, 28), account='测试账户', total_value=102.0, nav=1.02),
+            NAVHistory(date=date(2025, 3, 13), account='测试账户', total_value=103.0, nav=1.03),
+        ]
+        index = self.manager._build_nav_lookup(navs)
+
+        assert self.manager._find_latest_nav_before(navs, date(2025, 3, 14), nav_index=index).date == date(2025, 3, 13)
+        assert self.manager._find_year_end_nav(navs, '2024', nav_index=index).date == date(2024, 12, 31)
+        assert self.manager._find_year_end_nav(navs, '2023', nav_index=index) is None
+        assert self.manager._find_prev_month_end_nav(navs, 2025, 3, nav_index=index).date == date(2025, 2, 28)
+
+    def test_validate_nav_record_passes_for_consistent_data(self):
+        """测试一致的 NAV 记录可通过自校验"""
+        prev_month_end = NAVHistory(date=date(2025, 2, 28), account='测试账户', total_value=1000.0, nav=1.0)
+        prev_year_end = NAVHistory(date=date(2024, 12, 31), account='测试账户', total_value=1000.0, nav=1.0)
+        last_nav = NAVHistory(date=date(2025, 3, 13), account='测试账户', total_value=1000.0, nav=1.0, shares=1000.0)
+        nav_record = NAVHistory(
+            date=date(2025, 3, 14),
+            account='测试账户',
+            total_value=1100.0,
+            cash_value=100.0,
+            stock_value=1000.0,
+            stock_weight=0.909091,
+            cash_weight=0.090909,
+            shares=1100.0,
+            nav=1.0,
+            cash_flow=100.0,
+            share_change=100.0,
+            mtd_nav_change=0.0,
+            ytd_nav_change=0.0,
+            mtd_pnl=0.0,
+            ytd_pnl=0.0,
+            details={'cumulative_appreciation': 0.0},
+        )
+
+        self.manager._validate_nav_record(
+            nav_record=nav_record,
+            last_nav=last_nav,
+            prev_month_end_nav=prev_month_end,
+            prev_year_end_nav=prev_year_end,
+            daily_cash_flow=100.0,
+            monthly_cash_flow=100.0,
+            yearly_cash_flow=100.0,
+            gap_cash_flow=100.0,
+            initial_value=1000.0,
+            cumulative_cash_flow=100.0,
+        )
+
+    def test_validate_nav_record_raises_for_inconsistent_total(self):
+        """测试不一致的 NAV 记录会被自校验拦下"""
+        nav_record = NAVHistory(
+            date=date(2025, 3, 14),
+            account='测试账户',
+            total_value=1200.0,
+            cash_value=100.0,
+            stock_value=1000.0,
+            stock_weight=0.9,
+            cash_weight=0.1,
+            shares=1200.0,
+            nav=1.0,
+            cash_flow=200.0,
+            share_change=200.0,
+            mtd_nav_change=0.0,
+            ytd_nav_change=0.0,
+            mtd_pnl=0.0,
+            ytd_pnl=0.0,
+            details={'cumulative_appreciation': 0.0},
+        )
+
+        with pytest.raises(ValueError, match='total_value 不等于 stock_value \+ cash_value'):
+            self.manager._validate_nav_record(nav_record=nav_record)
 
 
 class TestPortfolioManagerShares:

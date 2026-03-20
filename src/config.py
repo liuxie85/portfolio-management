@@ -55,6 +55,8 @@ def get(key: str, default=None):
     # 环境变量映射（环境变量优先）
     env_map = {
         "account": "PORTFOLIO_ACCOUNT",
+        "storage.backend": "PORTFOLIO_STORAGE_BACKEND",
+        "storage.sqlite_path": "PORTFOLIO_SQLITE_PATH",
         "feishu.app_token": "FEISHU_APP_TOKEN",
         "feishu.app_id": "FEISHU_APP_ID",
         "feishu.app_secret": "FEISHU_APP_SECRET",
@@ -115,3 +117,13 @@ def get_data_dir() -> Path:
     data_dir = _PROJECT_ROOT / ".data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+def get_storage_backend() -> str:
+    """获取存储后端：auto | feishu | sqlite"""
+    return str(get("storage.backend", "auto")).lower()
+
+
+def get_sqlite_path() -> str:
+    """获取 SQLite 数据库路径"""
+    return str(get("storage.sqlite_path", get_project_root() / ".data" / "portfolio.db"))

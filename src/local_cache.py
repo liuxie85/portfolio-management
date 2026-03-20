@@ -142,6 +142,8 @@ class LocalPriceCache:
             price: 价格缓存对象
             _flush: 内部标志，True 时立即写入（用于批量操作后的最后一次）
         """
+        # 再过一次模型校验，避免旁路构造的价格对象把脏精度写入本地缓存
+        price = PriceCache(**price.model_dump())
         expires_at_str = None
         if price.expires_at:
             if isinstance(price.expires_at, datetime):

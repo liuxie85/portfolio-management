@@ -10,6 +10,7 @@
 4. 美股多数据源备选，防止限流
 """
 import requests
+from decimal import Decimal, ROUND_HALF_UP
 import re
 import os
 import time
@@ -32,6 +33,10 @@ RATE_CACHE_FILE = Path(__file__).parent.parent / '.data' / 'rate_cache.json'
 class PriceFetcher:
     """统一价格获取器 (带缓存优化，支持飞书多维表)"""
 
+    MONEY_QUANT = Decimal('0.01')
+    RATE_QUANT = Decimal('0.000001')
+    PCT_QUANT = Decimal('0.01')
+
     # 关键词列表（用于名称辅助判断资产类型）
     STOCK_KEYWORDS = [
         '股票', '股份', '集团', '银行', '科技', '医药', '能源',
@@ -48,6 +53,38 @@ class PriceFetcher:
         '博时', '工银', '华宝', '华安', '国泰', '招商', '鹏华',
     ]
     CASH_KEYWORDS = ['现金', '货币', 'mmf', 'cash', '余额宝']
+
+    @staticmethod
+    def _to_decimal(value) -> Decimal:
+        if value is None:
+            return Decimal('0')
+        if isinstance(value, Decimal):
+            return value
+        return Decimal(str(value))
+
+    @classmethod
+    def _quantize_money(cls, value) -> float:
+        return float(cls._to_decimal(value).quantize(cls.MONEY_QUANT, rounding=ROUND_HALF_UP))
+
+    @classmethod
+    def _quantize_rate(cls, value) -> float:
+        return float(cls._to_decimal(value).quantize(cls.RATE_QUANT, rounding=ROUND_HALF_UP))
+
+    @classmethod
+    def _quantize_pct(cls, value) -> float:
+        return float(cls._to_decimal(value).quantize(cls.PCT_QUANT, rounding=ROUND_HALF_UP))
+
+    @classmethod
+    def _normalize_price_payload(cls, payload: Dict) -> Dict:
+        result = dict(payload)
+        for key in ('price', 'prev_close', 'open', 'high', 'low', 'change', 'cny_price'):
+            if key in result and result[key] is not None:
+                result[key] = cls._quantize_money(result[key])
+        if 'change_pct' in result and result['change_pct'] is not None:
+            result['change_pct'] = cls._quantize_pct(result['change_pct'])
+        if 'exchange_rate' in result and result['exchange_rate'] is not None:
+            result['exchange_rate'] = cls._quantize_rate(result['exchange_rate'])
+        return result
 
     def __init__(self, storage=None, use_cache: bool = True):
         """
@@ -87,7 +124,7 @@ class PriceFetcher:
             from .models import PriceCache
             cached = self.storage.get_price(code)
             if cached:
-                return {
+                return self._normalize_price_payload({
                     'code': cached.asset_id,
                     'name': cached.asset_name,
                     'price': cached.price,
@@ -98,10 +135,12 @@ class PriceFetcher:
                     'exchange_rate': cached.exchange_rate,
                     'source': cached.data_source,
                     'expires_at': cached.expires_at
-                }
+                })
 
         # 获取实时价格
         result = self._fetch_realtime(code, asset_name)
+        if result:
+            result = self._normalize_price_payload(result)
 
         # 写入缓存
         if result and self.use_cache:
@@ -167,6 +206,21 @@ class PriceFetcher:
         expired_cache = {}  # 记录过期缓存，用于 fallback
 
         for code in codes:
+            normalized_code = (code or '').upper().strip()
+
+            # 现金/货基优先直接生成价格，避免在缓存回退路径中漏掉外币现金汇率
+            if normalized_code == 'CASH' or normalized_code.endswith('-CASH'):
+                try:
+                    results[code] = self._get_cash_price(normalized_code)
+                    continue
+                except Exception:
+                    # 如果实时汇率失败，再走后续缓存/回退逻辑
+                    pass
+
+            if normalized_code.endswith('-MMF'):
+                results[code] = self._get_mmf_price(normalized_code)
+                continue
+
             if self.use_cache:
                 from .models import PriceCache
                 cached = self.storage.get_price(code)
@@ -386,19 +440,19 @@ class PriceFetcher:
                                 rates = self._fetch_exchange_rates()
                                 usd_cny = rates['USDCNY']
 
-                                return code, {
+                                return code, self._normalize_price_payload({
                                     'code': code,
                                     'name': meta.get('shortName') or meta.get('longName') or code,
-                                    'price': round(current, 2),
-                                    'prev_close': round(prev_close, 2),
-                                    'change': round(change, 2),
-                                    'change_pct': round(change_pct, 2),
+                                    'price': current,
+                                    'prev_close': prev_close,
+                                    'change': change,
+                                    'change_pct': change_pct,
                                     'currency': meta.get('currency', 'USD'),
-                                    'cny_price': round(current * usd_cny, 2),
+                                    'cny_price': current * usd_cny,
                                     'exchange_rate': usd_cny,
                                     'market_type': 'us',
                                     'source': 'yahoo_api'
-                                }
+                                })
                 except Exception:
                     pass
 
@@ -419,19 +473,19 @@ class PriceFetcher:
                         rates = self._fetch_exchange_rates()
                         usd_cny = rates['USDCNY']
 
-                        return code, {
+                        return code, self._normalize_price_payload({
                             'code': code,
                             'name': info.get('shortName', yf_code),
-                            'price': round(current, 2),
-                            'prev_close': round(prev_close, 2),
-                            'change': round(change, 2),
-                            'change_pct': round(change_pct, 2),
+                            'price': current,
+                            'prev_close': prev_close,
+                            'change': change,
+                            'change_pct': change_pct,
                             'currency': info.get('currency', 'USD'),
-                            'cny_price': round(current * usd_cny, 2),
+                            'cny_price': current * usd_cny,
                             'exchange_rate': usd_cny,
                             'market_type': 'us',
                             'source': 'yfinance'
-                        }
+                        })
                 except Exception:
                     pass
 
@@ -584,7 +638,7 @@ class PriceFetcher:
             exchange_rate = rates[rate_key]
             cny_price = exchange_rate
 
-        return {
+        return self._normalize_price_payload({
             'code': code,
             'name': f'{currency}现金',
             'price': 1.0,
@@ -593,12 +647,12 @@ class PriceFetcher:
             'exchange_rate': exchange_rate,
             'market_type': 'cash',
             'source': 'fixed'
-        }
+        })
 
     def _get_mmf_price(self, code: str) -> Dict:
         """获取货币基金价格"""
         currency = code.split('-')[0]
-        return {
+        return self._normalize_price_payload({
             'code': code,
             'name': f'{currency}货币基金',
             'price': 1.0,
@@ -606,7 +660,7 @@ class PriceFetcher:
             'cny_price': 1.0,
             'market_type': 'mmf',
             'source': 'fixed'
-        }
+        })
 
     def _fetch_realtime(self, code: str, asset_name: str) -> Optional[Dict]:
         """获取实时价格 (内部方法)"""
@@ -950,7 +1004,7 @@ class PriceFetcher:
         if match:
             data = match.group(1).split('~')
             if len(data) > 45:
-                return {
+                return self._normalize_price_payload({
                     'code': code,
                     'name': data[1],
                     'price': float(data[3]),
@@ -966,7 +1020,7 @@ class PriceFetcher:
                     'cny_price': float(data[3]),
                     'market_type': 'cn',
                     'source': 'tencent'
-                }
+                })
         return None
 
     def _fetch_a_stock_from_akshare(self, code: str) -> Optional[Dict]:
@@ -991,7 +1045,7 @@ class PriceFetcher:
 
             data = row.iloc[0]
 
-            return {
+            return self._normalize_price_payload({
                 'code': code,
                 'name': data['名称'],
                 'price': float(data['最新价']) if pd.notna(data['最新价']) else 0.0,
@@ -1007,7 +1061,7 @@ class PriceFetcher:
                 'cny_price': float(data['最新价']) if pd.notna(data['最新价']) else 0.0,
                 'market_type': 'cn',
                 'source': 'akshare'
-            }
+            })
         except ImportError:
             print("[AKShare] 未安装akshare，跳过备用源")
             return None
@@ -1062,7 +1116,7 @@ class PriceFetcher:
                 rates = self._fetch_exchange_rates()
                 hkd_cny = rates['HKDCNY']
 
-                return {
+                return self._normalize_price_payload({
                     'code': code,
                     'name': data[1],
                     'price': price,
@@ -1075,11 +1129,11 @@ class PriceFetcher:
                     'volume': float(data[36]) * 100 if data[36] else 0,
                     'time': data[30],
                     'currency': 'HKD',
-                    'cny_price': round(price * hkd_cny, 2),
+                    'cny_price': price * hkd_cny,
                     'exchange_rate': hkd_cny,
                     'market_type': 'hk',
                     'source': 'tencent'
-                }
+                })
         return None
 
     def _fetch_hk_stock_from_akshare(self, code: str) -> Optional[Dict]:
@@ -1109,7 +1163,7 @@ class PriceFetcher:
             rates = self._fetch_exchange_rates()
             hkd_cny = rates['HKDCNY']
 
-            return {
+            return self._normalize_price_payload({
                 'code': code,
                 'name': data['名称'],
                 'price': price,
@@ -1122,11 +1176,11 @@ class PriceFetcher:
                 'volume': float(data['成交量']) if pd.notna(data['成交量']) else 0.0,
                 'time': data.get('时间', datetime.now().strftime('%H:%M:%S')),
                 'currency': 'HKD',
-                'cny_price': round(price * hkd_cny, 2),
+                'cny_price': price * hkd_cny,
                 'exchange_rate': hkd_cny,
                 'market_type': 'hk',
                 'source': 'akshare'
-            }
+            })
         except ImportError:
             print("[AKShare] 未安装akshare，跳过备用源")
             return None
@@ -1184,23 +1238,23 @@ class PriceFetcher:
                 rates = self._fetch_exchange_rates()
                 usd_cny = rates['USDCNY']
 
-                return {
+                return self._normalize_price_payload({
                     'code': code,
                     'name': info.get('shortName', yf_code),
-                    'price': round(current, 2),
-                    'prev_close': round(prev_close, 2),
-                    'open': round(latest['Open'], 2),
-                    'high': round(latest['High'], 2),
-                    'low': round(latest['Low'], 2),
-                    'change': round(change, 2),
-                    'change_pct': round(change_pct, 2),
+                    'price': current,
+                    'prev_close': prev_close,
+                    'open': latest['Open'],
+                    'high': latest['High'],
+                    'low': latest['Low'],
+                    'change': change,
+                    'change_pct': change_pct,
                     'volume': int(latest['Volume']),
                     'currency': info.get('currency', 'USD'),
-                    'cny_price': round(current * usd_cny, 2),
+                    'cny_price': current * usd_cny,
                     'exchange_rate': usd_cny,
                     'market_type': 'us',
                     'source': 'yfinance'
-                }
+                })
         except ImportError:
             errors.append("yfinance未安装")
         except Exception as e:
@@ -1243,22 +1297,22 @@ class PriceFetcher:
         rates = self._fetch_exchange_rates()
         usd_cny = rates['USDCNY']
 
-        return {
+        return self._normalize_price_payload({
             'code': code,
             'name': code,  # Finnhub quote 接口不返回名称，需要单独调用
-            'price': round(current, 2),
-            'prev_close': round(prev_close, 2) if prev_close else round(current, 2),
-            'open': round(data.get('o', current), 2),
-            'high': round(data.get('h', current), 2),
-            'low': round(data.get('l', current), 2),
-            'change': round(change, 2),
-            'change_pct': round(change_pct, 2),
+            'price': current,
+            'prev_close': prev_close if prev_close else current,
+            'open': data.get('o', current),
+            'high': data.get('h', current),
+            'low': data.get('l', current),
+            'change': change,
+            'change_pct': change_pct,
             'currency': 'USD',
-            'cny_price': round(current * usd_cny, 2),
+            'cny_price': current * usd_cny,
             'exchange_rate': usd_cny,
             'market_type': 'us',
             'source': 'finnhub'
-        }
+        })
 
     def _fetch_us_stock_yahoo_api(self, code: str) -> Optional[Dict]:
         """通过Yahoo Finance直接API获取美股价格"""
@@ -1324,23 +1378,23 @@ class PriceFetcher:
         rates = self._fetch_exchange_rates()
         usd_cny = rates['USDCNY']
 
-        return {
+        return self._normalize_price_payload({
             'code': code,
             'name': meta.get('shortName') or meta.get('longName') or meta.get('symbol'),
-            'price': round(current, 2),
-            'prev_close': round(prev_close, 2),
-            'open': round(opens[-1], 2) if opens and opens[-1] else round(current, 2),
-            'high': round(valid_highs[-1], 2) if valid_highs else round(current, 2),
-            'low': round(valid_lows[-1], 2) if valid_lows else round(current, 2),
-            'change': round(change, 2),
-            'change_pct': round(change_pct, 2),
+            'price': current,
+            'prev_close': prev_close,
+            'open': opens[-1] if opens and opens[-1] else current,
+            'high': valid_highs[-1] if valid_highs else current,
+            'low': valid_lows[-1] if valid_lows else current,
+            'change': change,
+            'change_pct': change_pct,
             'volume': int(valid_volumes[-1]) if valid_volumes else 0,
             'currency': meta.get('currency', 'USD'),
-            'cny_price': round(current * usd_cny, 2),
+            'cny_price': current * usd_cny,
             'exchange_rate': usd_cny,
             'market_type': 'us',
             'source': 'yahoo_api'
-        }
+        })
 
     def _fetch_etf(self, code: str) -> Optional[Dict]:
         """获取ETF价格"""
@@ -1359,7 +1413,7 @@ class PriceFetcher:
             if match:
                 data = match.group(1).split('~')
                 if len(data) > 45:
-                    return {
+                    return self._normalize_price_payload({
                         'code': code,
                         'name': data[1],
                         'price': float(data[3]),
@@ -1375,7 +1429,7 @@ class PriceFetcher:
                         'cny_price': float(data[3]),
                         'market_type': 'cn',
                         'source': 'tencent_etf'
-                    }
+                    })
             return None
 
         except Exception as e:
@@ -1417,7 +1471,7 @@ class PriceFetcher:
                         except Exception:
                             pass
 
-                        return {
+                        return self._normalize_price_payload({
                             'code': code,
                             'name': name,
                             'price': nav,
@@ -1427,7 +1481,7 @@ class PriceFetcher:
                             'cny_price': nav,
                             'market_type': 'fund',
                             'source': 'akshare_info'  # 单个查询接口
-                        }
+                        })
             except Exception as e:
                 print(f"[基金] 单个查询失败 {code}: {e}，尝试备用方案...")
 
@@ -1444,7 +1498,7 @@ class PriceFetcher:
                     except (ValueError, TypeError):
                         change_pct = None
 
-                    return {
+                    return self._normalize_price_payload({
                         'code': code,
                         'name': row['基金简称'],
                         'price': float(row['单位净值']),
@@ -1454,7 +1508,7 @@ class PriceFetcher:
                         'cny_price': float(row['单位净值']),
                         'market_type': 'fund',
                         'source': 'akshare_rank'  # 全量排行接口
-                    }
+                    })
             except Exception:
                 pass
 
@@ -1496,7 +1550,7 @@ class PriceFetcher:
                 change_match = re.search(r'class="(?:(?:ui-color-red)|(?:ui-color-green))"[^>]*>([+-]?[\d.]+)%', text)
                 change_pct = float(change_match.group(1)) if change_match else None
 
-                return {
+                return self._normalize_price_payload({
                     'code': code,
                     'name': name,
                     'price': nav,
@@ -1505,7 +1559,7 @@ class PriceFetcher:
                     'currency': 'CNY',
                     'cny_price': nav,
                     'source': 'eastmoney'
-                }
+                })
             return None
 
         except Exception as e:

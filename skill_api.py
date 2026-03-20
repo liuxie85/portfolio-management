@@ -6,9 +6,10 @@ Portfolio Management Skill API
 基于飞书多维表作为数据存储，支持多端同步
 """
 import sys
+import json
 from pathlib import Path
 from datetime import date, datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # 确保能 import 到 src 模块
 SKILL_DIR = Path(__file__).parent.resolve()
@@ -17,6 +18,8 @@ sys.path.insert(0, str(SKILL_DIR))
 from src.feishu_storage import FeishuStorage, FeishuClient
 from src.portfolio import PortfolioManager
 from src.price_fetcher import PriceFetcher
+from src.storage import create_storage
+from src.reporting_utils import normalize_asset_type, normalization_warning
 from src.models import AssetType, AssetClass, Industry, Holding, NAVHistory
 from src.asset_utils import (
     validate_code as validate_asset_code,
@@ -36,6 +39,459 @@ DEFAULT_ACCOUNT = config.get_account()
 class PortfolioSkill:
     """投资组合管理 Skill 核心类"""
 
+    def build_snapshot(self) -> Dict[str, Any]:
+        """构建统一估值快照，供 full_report / record_nav 复用，避免时点差。"""
+        valuation = self.portfolio.calculate_valuation(self.account)
+        holdings = valuation.holdings or []
+        holdings_list = []
+        for h in holdings:
+            holdings_list.append({
+                "code": h.asset_id,
+                "name": h.asset_name,
+                "quantity": h.quantity,
+                "type": h.asset_type.value if h.asset_type else None,
+                "normalized_type": normalize_asset_type(h.asset_type, h.asset_id),
+                "market": h.market,
+                "currency": h.currency,
+                "price": h.current_price,
+                "cny_price": h.cny_price,
+                "market_value": h.market_value_cny,
+                "weight": h.weight,
+            })
+        holdings_list.sort(key=lambda x: x.get("market_value") or 0, reverse=True)
+
+        return {
+            "snapshot_time": datetime.now().isoformat(),
+            "valuation": valuation,
+            "holdings_data": {
+                "success": True,
+                "holdings": holdings_list,
+                "count": len(holdings_list),
+                "total_value": valuation.total_value_cny,
+                "cash_value": valuation.cash_value_cny,
+                "stock_value": valuation.stock_value_cny + valuation.fund_value_cny,
+                "cash_ratio": valuation.cash_ratio,
+                "warnings": valuation.warnings,
+            },
+            "position_data": {
+                "cash_ratio": valuation.cash_ratio,
+                "stock_ratio": valuation.stock_ratio,
+                "fund_ratio": valuation.fund_ratio,
+            }
+        }
+
+    # backward compatibility
+    def _build_snapshot(self) -> Dict[str, Any]:
+        return self.build_snapshot()
+
+    def audit_nav_history_metrics(self, account: Optional[str] = None, days: int = 900, write_report: bool = True) -> Dict[str, Any]:
+        """审计 nav_history 四个核心派生字段，与当前代码公式逐条比对。
+
+        注意：目标记录范围可由 days 限制，但月/年基准一律从全量历史中查找；
+        若缺少基准，则重算结果返回 None，绝不偷补 0。
+        """
+        audit_account = account or self.account
+        all_navs = sorted(self.storage.get_nav_history(audit_account, days=9999), key=lambda n: n.date)
+        if days and days > 0:
+            cutoff = date.today() - timedelta(days=days)
+            target_navs = [n for n in all_navs if n.date >= cutoff]
+        else:
+            target_navs = list(all_navs)
+
+        rows = []
+        for n in target_navs:
+            pm = self.portfolio._find_prev_month_end_nav(all_navs, n.date.year, n.date.month)
+            py = self.portfolio._find_year_end_nav(all_navs, str(n.date.year - 1))
+            monthly_cf = self.portfolio._get_monthly_cash_flow(audit_account, n.date.year, n.date.month) if pm else None
+            yearly_cf = self.portfolio._get_yearly_cash_flow(audit_account, str(n.date.year)) if py else None
+            raw_mtd_nav_change = self.portfolio._calc_mtd_nav_change(n.nav, pm) if (n.nav is not None and pm) else None
+            raw_ytd_nav_change = self.portfolio._calc_ytd_nav_change(n.nav, py) if (n.nav is not None and py) else None
+            raw_mtd_pnl = self.portfolio._calc_mtd_pnl(n.total_value, pm, monthly_cf) if (n.total_value is not None and pm is not None and monthly_cf is not None) else None
+            raw_ytd_pnl = self.portfolio._calc_ytd_pnl(n.total_value, py, yearly_cf) if (n.total_value is not None and py is not None and yearly_cf is not None) else None
+            recomputed_mtd_nav_change = round(raw_mtd_nav_change, 6) if raw_mtd_nav_change is not None else None
+            recomputed_ytd_nav_change = round(raw_ytd_nav_change, 6) if raw_ytd_nav_change is not None else None
+            recomputed_mtd_pnl = round(raw_mtd_pnl, 2) if raw_mtd_pnl is not None else None
+            recomputed_ytd_pnl = round(raw_ytd_pnl, 2) if raw_ytd_pnl is not None else None
+
+            # 审计去误报：
+            # 1) 初始记录若缺少月基准，不视为异常
+            # 2) 1 月份 mtd == ytd 属于正常，不视为 swapped
+            is_initial_without_month_base = (pm is None)
+            is_january_same_period_return = (
+                n.date.month == 1
+                and recomputed_mtd_nav_change is not None
+                and recomputed_ytd_nav_change is not None
+                and recomputed_mtd_nav_change == recomputed_ytd_nav_change
+            )
+            rows.append({
+                "record_id": n.record_id,
+                "date": n.date.isoformat(),
+                "pm_base_date": pm.date.isoformat() if pm else None,
+                "py_base_date": py.date.isoformat() if py else None,
+                "stored_mtd_nav_change": n.mtd_nav_change,
+                "recomputed_mtd_nav_change": recomputed_mtd_nav_change,
+                "stored_ytd_nav_change": n.ytd_nav_change,
+                "recomputed_ytd_nav_change": recomputed_ytd_nav_change,
+                "stored_mtd_pnl": n.mtd_pnl,
+                "recomputed_mtd_pnl": recomputed_mtd_pnl,
+                "stored_ytd_pnl": n.ytd_pnl,
+                "recomputed_ytd_pnl": recomputed_ytd_pnl,
+                "base_missing": {"month": pm is None, "year": py is None},
+                "audit_exemptions": {
+                    "initial_without_month_base": is_initial_without_month_base,
+                    "january_mtd_equals_ytd": is_january_same_period_return,
+                },
+            })
+        def _neq(a, b, kind='money'):
+            if a is None or b is None:
+                return (a is not None and b is None) or (a is None and b is not None)
+            if kind == 'nav':
+                return not self.portfolio._nav_equal(a, b)
+            return not self.portfolio._money_equal(a, b)
+
+        def _neq_mtd_nav(r):
+            if r.get("audit_exemptions", {}).get("initial_without_month_base"):
+                return False
+            return _neq(r["stored_mtd_nav_change"], r["recomputed_mtd_nav_change"], kind='nav')
+
+        sign_flip_mtd = [r["date"] for r in rows if r["stored_mtd_pnl"] is not None and r["recomputed_mtd_pnl"] is not None and r["stored_mtd_pnl"] * r["recomputed_mtd_pnl"] < 0]
+        sign_flip_ytd = [r["date"] for r in rows if r["stored_ytd_pnl"] is not None and r["recomputed_ytd_pnl"] is not None and r["stored_ytd_pnl"] * r["recomputed_ytd_pnl"] < 0]
+        swapped_dates = [
+            r["date"] for r in rows
+            if r["stored_mtd_nav_change"] == r["recomputed_ytd_nav_change"]
+            and r["stored_ytd_nav_change"] == r["recomputed_mtd_nav_change"]
+            and not r.get("audit_exemptions", {}).get("january_mtd_equals_ytd")
+        ]
+        summary = {
+            "mtd_nav_change_mismatch": sum(1 for r in rows if _neq_mtd_nav(r)),
+            "ytd_nav_change_mismatch": sum(1 for r in rows if _neq(r["stored_ytd_nav_change"], r["recomputed_ytd_nav_change"], kind='nav')),
+            "mtd_pnl_mismatch": sum(1 for r in rows if _neq(r["stored_mtd_pnl"], r["recomputed_mtd_pnl"], kind='money')),
+            "ytd_pnl_mismatch": sum(1 for r in rows if _neq(r["stored_ytd_pnl"], r["recomputed_ytd_pnl"], kind='money')),
+            "base_missing_month": sum(1 for r in rows if r.get("base_missing", {}).get("month")),
+            "base_missing_year": sum(1 for r in rows if r.get("base_missing", {}).get("year")),
+            "sign_flip_mtd_pnl": len(sign_flip_mtd),
+            "sign_flip_ytd_pnl": len(sign_flip_ytd),
+            "swapped_nav_change_like": len(swapped_dates),
+            "sign_flip_mtd_pnl_dates": sign_flip_mtd,
+            "sign_flip_ytd_pnl_dates": sign_flip_ytd,
+            "swapped_nav_change_dates": swapped_dates,
+        }
+        result = {"success": True, "account": audit_account, "count": len(rows), "summary": summary, "rows": rows}
+        if write_report:
+            audit_dir = SKILL_DIR / 'audit'
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            out = audit_dir / f'nav_history_audit_{audit_account}_{stamp}.json'
+            out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+            result['report_file'] = str(out)
+        return result
+
+    def audit_nav_history_reconcile(self, account: Optional[str] = None, days: int = 900, write_report: bool = True) -> Dict[str, Any]:
+        """按日期顺序对 nav_history 做历史对账，输出 ok / exempt / anomaly。"""
+        audit_account = account or self.account
+        all_navs = sorted(self.storage.get_nav_history(audit_account, days=9999), key=lambda n: n.date)
+        nav_index = self.portfolio._build_nav_lookup(all_navs)
+        if days and days > 0:
+            cutoff = date.today() - timedelta(days=days)
+            target_navs = [n for n in all_navs if n.date >= cutoff]
+        else:
+            target_navs = list(all_navs)
+
+        rows = []
+        for n in target_navs:
+            prev_nav = self.portfolio._find_latest_nav_before(all_navs, n.date, nav_index=nav_index)
+            pm = self.portfolio._find_prev_month_end_nav(all_navs, n.date.year, n.date.month, nav_index=nav_index)
+            py = self.portfolio._find_year_end_nav(all_navs, str(n.date.year - 1), nav_index=nav_index)
+            daily_cf = self.portfolio._get_daily_cash_flow(audit_account, n.date)
+            monthly_cf = self.portfolio._get_monthly_cash_flow(audit_account, n.date.year, n.date.month) if pm else None
+            yearly_cf = self.portfolio._get_yearly_cash_flow(audit_account, str(n.date.year)) if py else None
+
+            anomalies = []
+            exemptions = []
+
+            expected_total = float(self.portfolio._quantize_money((n.stock_value or 0.0) + (n.cash_value or 0.0)))
+            if not self.portfolio._money_equal(n.total_value, expected_total):
+                anomalies.append(f"total_value != stock_value + cash_value ({n.total_value} != {expected_total})")
+
+            if n.total_value and n.total_value > 0 and n.stock_weight is not None and n.cash_weight is not None:
+                weights_sum = n.stock_weight + n.cash_weight
+                if not self.portfolio._approx_equal(weights_sum, 1.0, tolerance=1e-4):
+                    anomalies.append(f"stock_weight + cash_weight != 1 ({weights_sum})")
+
+            if n.shares and n.shares > 0 and n.nav is not None:
+                expected_nav = float(self.portfolio._quantize_nav(self.portfolio._to_decimal(n.total_value) / self.portfolio._to_decimal(n.shares)))
+                if not self.portfolio._nav_equal(n.nav, expected_nav):
+                    # 兼容历史月度快照使用 4 位 NAV 精度的旧口径：
+                    # 若存量值与 4 位四舍五入结果一致，则视为 legacy precision，不判 anomaly。
+                    legacy_expected_nav_4dp = float(round(expected_nav, 4))
+                    if self.portfolio._approx_equal(n.nav, legacy_expected_nav_4dp, tolerance=1e-6):
+                        exemptions.append('legacy_nav_precision_4dp')
+                    else:
+                        anomalies.append(f"nav != total_value / shares ({n.nav} != {expected_nav})")
+
+            raw_mtd = self.portfolio._calc_mtd_nav_change(n.nav, pm) if (n.nav is not None and pm) else None
+            raw_ytd = self.portfolio._calc_ytd_nav_change(n.nav, py) if (n.nav is not None and py) else None
+            raw_mtd_pnl = self.portfolio._calc_mtd_pnl(n.total_value, pm, monthly_cf) if (n.total_value is not None and pm is not None and monthly_cf is not None) else None
+            raw_ytd_pnl = self.portfolio._calc_ytd_pnl(n.total_value, py, yearly_cf) if (n.total_value is not None and py is not None and yearly_cf is not None) else None
+
+            recomputed_mtd = round(raw_mtd, 6) if raw_mtd is not None else None
+            recomputed_ytd = round(raw_ytd, 6) if raw_ytd is not None else None
+            recomputed_mtd_pnl = round(raw_mtd_pnl, 2) if raw_mtd_pnl is not None else None
+            recomputed_ytd_pnl = round(raw_ytd_pnl, 2) if raw_ytd_pnl is not None else None
+
+            if pm is None:
+                exemptions.append('missing_month_base')
+            if py is None:
+                exemptions.append('missing_year_base')
+            if n.date.month == 1 and recomputed_mtd is not None and recomputed_ytd is not None and recomputed_mtd == recomputed_ytd:
+                exemptions.append('january_mtd_equals_ytd')
+
+            if not self.portfolio._nav_equal(n.mtd_nav_change, recomputed_mtd) and 'missing_month_base' not in exemptions:
+                anomalies.append(f"mtd_nav_change mismatch ({n.mtd_nav_change} != {recomputed_mtd})")
+            if not self.portfolio._nav_equal(n.ytd_nav_change, recomputed_ytd) and 'missing_year_base' not in exemptions:
+                anomalies.append(f"ytd_nav_change mismatch ({n.ytd_nav_change} != {recomputed_ytd})")
+            if not self.portfolio._money_equal(n.mtd_pnl, recomputed_mtd_pnl) and 'missing_month_base' not in exemptions:
+                anomalies.append(f"mtd_pnl mismatch ({n.mtd_pnl} != {recomputed_mtd_pnl})")
+            if not self.portfolio._money_equal(n.ytd_pnl, recomputed_ytd_pnl) and 'missing_year_base' not in exemptions:
+                anomalies.append(f"ytd_pnl mismatch ({n.ytd_pnl} != {recomputed_ytd_pnl})")
+
+            if prev_nav and prev_nav.date and (n.date - prev_nav.date).days == 1 and n.pnl is not None:
+                expected_daily_pnl = float(self.portfolio._quantize_money(
+                    self.portfolio._to_decimal(n.total_value) - self.portfolio._to_decimal(prev_nav.total_value) - self.portfolio._to_decimal(daily_cf)
+                ))
+                if not self.portfolio._money_equal(n.pnl, expected_daily_pnl):
+                    anomalies.append(f"pnl mismatch ({n.pnl} != {expected_daily_pnl})")
+            elif n.pnl is not None and (not prev_nav or (n.date - prev_nav.date).days != 1):
+                exemptions.append('non_consecutive_daily_pnl')
+
+            if prev_nav and prev_nav.shares is not None and self.portfolio._approx_equal(daily_cf, 0.0, tolerance=0.01):
+                # 仅在相邻日记录下，才用 daily cash flow 规则约束 shares 变化。
+                # 对月度/阶段性快照，shares 变化可能来自期间累计资金流，不应直接判 anomaly。
+                if (n.date - prev_nav.date).days == 1:
+                    if not self.portfolio._approx_equal(n.shares, prev_nav.shares, tolerance=0.01):
+                        anomalies.append(f"shares changed without daily cash flow ({n.shares} != {prev_nav.shares})")
+                elif not self.portfolio._approx_equal(n.shares, prev_nav.shares, tolerance=0.01):
+                    exemptions.append('non_consecutive_share_change')
+
+            status = 'anomaly' if anomalies else ('exempt' if exemptions else 'ok')
+            rows.append({
+                'record_id': n.record_id,
+                'date': n.date.isoformat(),
+                'status': status,
+                'anomalies': anomalies,
+                'exemptions': exemptions,
+                'basis': {
+                    'prev_nav_date': prev_nav.date.isoformat() if prev_nav else None,
+                    'prev_nav_total_value': prev_nav.total_value if prev_nav else None,
+                    'prev_nav_shares': prev_nav.shares if prev_nav else None,
+                    'prev_month_end_date': pm.date.isoformat() if pm else None,
+                    'prev_month_end_nav': pm.nav if pm else None,
+                    'prev_month_end_total_value': pm.total_value if pm else None,
+                    'prev_year_end_date': py.date.isoformat() if py else None,
+                    'prev_year_end_nav': py.nav if py else None,
+                    'prev_year_end_total_value': py.total_value if py else None,
+                },
+                'cash_flow_basis': {
+                    'daily_cash_flow': daily_cf,
+                    'monthly_cash_flow': monthly_cf,
+                    'yearly_cash_flow': yearly_cf,
+                },
+                'stored': {
+                    'total_value': n.total_value,
+                    'cash_value': n.cash_value,
+                    'stock_value': n.stock_value,
+                    'nav': n.nav,
+                    'shares': n.shares,
+                    'pnl': n.pnl,
+                    'mtd_nav_change': n.mtd_nav_change,
+                    'ytd_nav_change': n.ytd_nav_change,
+                    'mtd_pnl': n.mtd_pnl,
+                    'ytd_pnl': n.ytd_pnl,
+                },
+                'recomputed': {
+                    'daily_cash_flow': daily_cf,
+                    'mtd_nav_change': recomputed_mtd,
+                    'ytd_nav_change': recomputed_ytd,
+                    'mtd_pnl': recomputed_mtd_pnl,
+                    'ytd_pnl': recomputed_ytd_pnl,
+                    'expected_daily_pnl': round(n.total_value - prev_nav.total_value - daily_cf, 2) if (prev_nav and prev_nav.date and (n.date - prev_nav.date).days == 1) else None,
+                },
+            })
+
+        anomaly_rows = [r for r in rows if r['status'] == 'anomaly']
+        summary = {
+            'ok': sum(1 for r in rows if r['status'] == 'ok'),
+            'exempt': sum(1 for r in rows if r['status'] == 'exempt'),
+            'anomaly': len(anomaly_rows),
+            'anomaly_dates': [r['date'] for r in anomaly_rows],
+            'anomaly_examples': [
+                {
+                    'date': r['date'],
+                    'anomalies': r['anomalies'],
+                    'basis': r['basis'],
+                }
+                for r in anomaly_rows[:10]
+            ],
+        }
+        result = {'success': True, 'account': audit_account, 'count': len(rows), 'summary': summary, 'rows': rows}
+        if write_report:
+            audit_dir = SKILL_DIR / 'audit'
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            out = audit_dir / f'nav_history_reconcile_{audit_account}_{stamp}.json'
+            out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+            result['report_file'] = str(out)
+        return result
+
+    def audit_nav_history_accuracy(self, account: Optional[str] = None, days: int = 900, write_report: bool = True) -> Dict[str, Any]:
+        """统一准确性审计入口：汇总 metrics / reconcile / repair candidates。"""
+        audit_account = account or self.account
+        metrics = self.audit_nav_history_metrics(account=audit_account, days=days, write_report=False)
+        if not metrics.get('success'):
+            return metrics
+        reconcile = self.audit_nav_history_reconcile(account=audit_account, days=days, write_report=False)
+        if not reconcile.get('success'):
+            return reconcile
+
+        reconcile_by_date = {row['date']: row for row in reconcile.get('rows', [])}
+        repair_candidates = []
+        exempt_rows = []
+        ok_rows = []
+        for row in metrics.get('rows', []):
+            rec = reconcile_by_date.get(row['date'], {})
+            status = rec.get('status', 'unknown')
+            item = {
+                'record_id': row['record_id'],
+                'date': row['date'],
+                'status': status,
+                'base_missing': row.get('base_missing'),
+                'audit_exemptions': row.get('audit_exemptions'),
+                'anomalies': rec.get('anomalies', []),
+                'exemptions': rec.get('exemptions', []),
+            }
+            if status == 'anomaly':
+                repair_candidates.append(item)
+            elif status == 'exempt':
+                exempt_rows.append(item)
+            else:
+                ok_rows.append(item)
+
+        summary = {
+            'metrics': metrics.get('summary', {}),
+            'reconcile': reconcile.get('summary', {}),
+            'repair_candidates': len(repair_candidates),
+            'exempt_rows': len(exempt_rows),
+            'ok_rows': len(ok_rows),
+        }
+        result = {
+            'success': True,
+            'account': audit_account,
+            'days': days,
+            'summary': summary,
+            'metrics': metrics,
+            'reconcile': reconcile,
+            'repair_candidates': repair_candidates,
+            'exempt_rows': exempt_rows,
+            'ok_rows': ok_rows,
+        }
+        if write_report:
+            audit_dir = SKILL_DIR / 'audit'
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            out = audit_dir / f'nav_history_accuracy_{audit_account}_{stamp}.json'
+            out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+            result['report_file'] = str(out)
+        return result
+
+    def repair_nav_history_metrics(self, account: Optional[str] = None, days: int = 900, dry_run: bool = True, write_report: bool = True) -> Dict[str, Any]:
+        """按统一准确性审计结果修复 nav_history 派生字段；仅修复真正 anomaly，默认 dry_run。"""
+        accuracy = self.audit_nav_history_accuracy(account=account, days=days, write_report=False)
+        if not accuracy.get("success"):
+            return accuracy
+
+        metrics_rows = {row['date']: row for row in accuracy.get('metrics', {}).get('rows', [])}
+        repair_candidates = accuracy.get('repair_candidates', [])
+        exempt_rows = accuracy.get('exempt_rows', [])
+        ok_rows = accuracy.get('ok_rows', [])
+
+        updates = []
+        skipped = []
+
+        for item in repair_candidates:
+            row = metrics_rows.get(item['date'])
+            if not row:
+                skipped.append({
+                    'record_id': item.get('record_id'),
+                    'date': item.get('date'),
+                    'reason': 'missing_metrics_row',
+                    'exemptions': item.get('exemptions'),
+                })
+                continue
+
+            fields = {}
+
+            # 缺基准时明确清空，不再保留历史伪 0
+            if row.get('base_missing', {}).get('month'):
+                fields['mtd_nav_change'] = None
+                fields['mtd_pnl'] = None
+            else:
+                fields['mtd_nav_change'] = row.get('recomputed_mtd_nav_change')
+                fields['mtd_pnl'] = row.get('recomputed_mtd_pnl')
+
+            if row.get('base_missing', {}).get('year'):
+                fields['ytd_nav_change'] = None
+                fields['ytd_pnl'] = None
+            else:
+                fields['ytd_nav_change'] = row.get('recomputed_ytd_nav_change')
+                fields['ytd_pnl'] = row.get('recomputed_ytd_pnl')
+
+            updates.append({
+                'record_id': row.get('record_id'),
+                'date': row.get('date'),
+                'fields': fields,
+                'base_missing': row.get('base_missing'),
+                'reconcile_status': item.get('status'),
+                'anomalies': item.get('anomalies'),
+                'exemptions': item.get('exemptions'),
+            })
+
+        for item in exempt_rows + ok_rows:
+            skipped.append({
+                'record_id': item.get('record_id'),
+                'date': item.get('date'),
+                'reason': f"status={item.get('status')}",
+                'exemptions': item.get('exemptions'),
+            })
+
+        if not dry_run:
+            for item in updates:
+                self.storage.update_nav_fields(item['record_id'], item['fields'], dry_run=False)
+        result = {
+            'success': True,
+            'dry_run': dry_run,
+            'account': account or self.account,
+            'count': len(updates),
+            'summary': accuracy.get('summary'),
+            'repair_policy': 'anomaly_only_via_accuracy_audit',
+            'updates': updates,
+            'skipped': skipped,
+            'skipped_count': len(skipped),
+            'accuracy_report': {
+                'repair_candidates': len(repair_candidates),
+                'exempt_rows': len(exempt_rows),
+                'ok_rows': len(ok_rows),
+            },
+        }
+        if write_report:
+            audit_dir = SKILL_DIR / 'audit'
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            suffix = 'dryrun' if dry_run else 'applied'
+            out = audit_dir / f'nav_history_repair_{account or self.account}_{suffix}_{stamp}.json'
+            out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+            result['report_file'] = str(out)
+        return result
+
     def __init__(self, account: str = DEFAULT_ACCOUNT, feishu_client: FeishuClient = None):
         """
         初始化 Skill
@@ -45,7 +501,7 @@ class PortfolioSkill:
             feishu_client: 飞书客户端实例（可选，用于自定义配置）
         """
         self.account = account
-        self.storage = FeishuStorage(feishu_client)
+        self.storage = FeishuStorage(feishu_client) if feishu_client else create_storage()
         self.portfolio = PortfolioManager(self.storage)
         self.price_fetcher = PriceFetcher(storage=self.storage)
 
@@ -306,13 +762,18 @@ class PortfolioSkill:
             total_cny = 0
             cash_value = 0
             result_holdings = []
+            normalization_warnings = []
 
             for h in holdings:
                 # 获取价格（如果已获取）
                 price_data = prices.get(h.asset_id, {})
 
-                # 现金和货币基金特殊处理
-                is_cash_asset = h.asset_type in [AssetType.CASH, AssetType.MMF] or h.asset_id.endswith(('-CASH', '-MMF'))
+                # 统一资产分类口径
+                normalized_type = normalize_asset_type(h.asset_type, h.asset_id)
+                warn = normalization_warning(h.asset_type, h.asset_id)
+                if warn and warn not in normalization_warnings:
+                    normalization_warnings.append(warn)
+                is_cash_asset = normalized_type == 'cash'
 
                 if is_cash_asset:
                     current_price = 1.0
@@ -342,18 +803,19 @@ class PortfolioSkill:
 
                 # 校验：持仓不为0但市值为0，说明价格获取失败
                 if include_price and h.quantity != 0 and (market_value is None or market_value == 0):
-                    if h.asset_type not in [AssetType.CASH, AssetType.MMF]:
+                    if normalized_type != 'cash':
                         price_errors.append(f"{h.asset_name}({h.asset_id}): 持仓{h.quantity}但市值为0，价格获取失败")
 
                 if market_value is not None:
                     total_cny += market_value
 
-                if include_cash or h.asset_type not in [AssetType.CASH, AssetType.MMF]:
+                if include_cash or normalized_type != 'cash':
                     item = {
                         "code": h.asset_id,
                         "name": h.asset_name,
                         "quantity": h.quantity,
                         "type": h.asset_type.value if h.asset_type else None,
+                        "normalized_type": normalized_type,
                         "market": h.market,
                         "currency": h.currency
                     }
@@ -369,7 +831,8 @@ class PortfolioSkill:
             # 只有在包含价格时才计算权重和排序
             if include_price:
                 for item in result_holdings:
-                    item["weight"] = item["market_value"] / total_cny if total_cny > 0 else 0
+                    mv = item.get("market_value") or 0
+                    item["weight"] = mv / total_cny if total_cny > 0 else 0
                 result_holdings.sort(key=lambda x: x.get("market_value") or 0, reverse=True)
 
             result = {
@@ -386,9 +849,14 @@ class PortfolioSkill:
                     "cash_ratio": cash_value / total_cny if total_cny > 0 else 0,
                 })
 
-            # 添加价格获取警告信息
+            # 添加警告信息
+            all_warnings = []
+            if normalization_warnings:
+                all_warnings.extend([f"分类兜底: {w}" for w in normalization_warnings])
             if price_errors:
-                result["warnings"] = price_errors
+                all_warnings.extend(price_errors)
+            if all_warnings:
+                result["warnings"] = all_warnings
 
             if group_by_market:
                 # 按券商分组
@@ -439,10 +907,10 @@ class PortfolioSkill:
 
         holdings = result.get("holdings", [])
         stock_value = sum((h.get("market_value") or 0) for h in holdings
-                         if h.get("type") in ["a_stock", "hk_stock", "us_stock"])
-        fund_value = sum((h.get("market_value") or 0) for h in holdings if h.get("type") == "fund")
+                         if h.get("normalized_type") == "stock")
+        fund_value = sum((h.get("market_value") or 0) for h in holdings if h.get("normalized_type") == "fund")
         total_value = result.get("total_value", 0)
-        cash_value = result.get("cash_value", 0)
+        cash_value = sum((h.get("market_value") or 0) for h in holdings if h.get("normalized_type") == "cash")
         cash_ratio = result.get("cash_ratio", 0)
 
         return {
@@ -477,7 +945,7 @@ class PortfolioSkill:
         holdings = result.get("holdings", [])
         for h in holdings:
             # 按类型求和
-            t = h.get("type") or "other"
+            t = h.get("normalized_type") or "other"
             market_value = h.get("market_value") or 0
             type_dist[t] = type_dist.get(t, 0) + market_value
 
@@ -528,7 +996,6 @@ class PortfolioSkill:
                 "share_change": latest.share_change,
                 "mtd_nav_change": latest.mtd_nav_change,
                 "ytd_nav_change": latest.ytd_nav_change,
-                "pnl": latest.pnl,
                 "mtd_pnl": latest.mtd_pnl,
                 "ytd_pnl": latest.ytd_pnl,
             }
@@ -552,7 +1019,6 @@ class PortfolioSkill:
                 item = {
                     "date": n.date.isoformat(),
                     "nav": n.nav,
-                    "pnl": n.pnl,
                     "share_change": n.share_change,
                 }
                 history.append(item)
@@ -745,8 +1211,7 @@ class PortfolioSkill:
             holding = self.storage.get_holding(asset, self.account)
             if holding:
                 new_qty = holding.quantity + amount
-                holding.quantity = new_qty
-                self.storage.upsert_holding(holding)
+                self.storage.update_holding_quantity(asset, self.account, amount, getattr(holding, 'market', None))
                 return {
                     "success": True,
                     "asset": asset,
@@ -773,8 +1238,7 @@ class PortfolioSkill:
                 }
 
             new_qty = holding.quantity - amount
-            holding.quantity = new_qty
-            self.storage.upsert_holding(holding)
+            self.storage.update_holding_quantity(asset, self.account, -amount, getattr(holding, 'market', None))
             return {
                 "success": True,
                 "asset": asset,
@@ -788,7 +1252,10 @@ class PortfolioSkill:
     # ---------- 完整报告 ----------
 
     def generate_report(self, report_type: str = "daily",
-                        record_nav: bool = False, price_timeout: int = 30) -> Dict[str, Any]:
+                        record_nav: bool = False, price_timeout: int = 30,
+                        snapshot: Optional[Dict[str, Any]] = None,
+                        overwrite_existing: bool = True,
+                        dry_run: bool = False) -> Dict[str, Any]:
         """生成日报/月报/年报
 
         Args:
@@ -796,37 +1263,54 @@ class PortfolioSkill:
             record_nav: 是否自动记录今日净值
             price_timeout: 价格获取超时时间（秒）
         """
-        full = self.full_report(price_timeout=price_timeout)
+        snapshot = snapshot or self.build_snapshot()
+        full = self.full_report(price_timeout=price_timeout, snapshot=snapshot)
         if not full.get("success"):
             return full
 
         # 记录净值在报告生成之后，避免影响报告数据
         nav_recorded = None
         if record_nav:
-            nav_recorded = self.record_nav(price_timeout=price_timeout)
+            nav_recorded = self.record_nav(
+                price_timeout=price_timeout,
+                snapshot=snapshot,
+                overwrite_existing=overwrite_existing,
+                dry_run=dry_run,
+            )
 
         nav = full.get("nav") or {}
         nav_details = nav.get("details") or {}
         returns = full.get("returns") or {}
+        since_inception = returns.get("since_inception") or {}
+        cagr_value = nav_details.get("cagr")
+        cagr_pct_value = nav_details.get("cagr_pct")
+        if cagr_value is None and since_inception.get("success"):
+            # 兼容 nav_history 表没有 details 字段的情况
+            cagr_pct_value = since_inception.get("cagr_pct")
+            cagr_value = (cagr_pct_value / 100) if cagr_pct_value is not None else since_inception.get("cagr")
+
+        report_warnings = list(full.get("warnings") or [])
 
         if report_type == "daily":
             return {
                 "success": True,
+                "snapshot_time": snapshot.get("snapshot_time"),
                 "report_type": "日报",
                 "date": nav.get("date"),
                 "overview": full["overview"],
                 "nav": nav.get("nav"),
                 "total_value": nav.get("total_value"),
-                "pnl": nav.get("pnl"),
                 "cash_flow": nav.get("cash_flow"),
                 "top_holdings": full.get("top_holdings"),
-                "cagr": nav_details.get("cagr"),
-                "cagr_pct": nav_details.get("cagr_pct"),
+                "cagr": cagr_value,
+                "cagr_pct": cagr_pct_value,
+                "warnings": report_warnings,
             }
 
         elif report_type == "monthly":
             return {
                 "success": True,
+                "snapshot_time": snapshot.get("snapshot_time"),
                 "report_type": "月报",
                 "date": nav.get("date"),
                 "overview": full["overview"],
@@ -837,8 +1321,8 @@ class PortfolioSkill:
                 "mtd_pnl": nav.get("mtd_pnl"),
                 "top_holdings": full.get("top_holdings"),
                 "distribution": full.get("distribution"),
-                "cagr": nav_details.get("cagr"),
-                "cagr_pct": nav_details.get("cagr_pct"),
+                "cagr": cagr_value,
+                "cagr_pct": cagr_pct_value,
             }
 
         elif report_type == "yearly":
@@ -850,6 +1334,7 @@ class PortfolioSkill:
 
             return {
                 "success": True,
+                "snapshot_time": snapshot.get("snapshot_time"),
                 "report_type": "年报",
                 "date": nav.get("date"),
                 "overview": full["overview"],
@@ -873,7 +1358,7 @@ class PortfolioSkill:
         else:
             return {"success": False, "error": f"不支持的报告类型: {report_type}，可选: daily/monthly/yearly"}
 
-    def full_report(self, price_timeout: int = 30) -> Dict[str, Any]:
+    def full_report(self, price_timeout: int = 30, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """生成完整报告（只读，不记录净值）
 
         利用实时持仓价格合成"今日"虚拟净值，确保收益统计始终可用，
@@ -883,36 +1368,77 @@ class PortfolioSkill:
             price_timeout: 价格获取超时时间（秒），默认30秒
         """
         try:
-            # 使用带超时保护的持仓查询（只获取一次）
-            holdings_data = self.get_holdings(include_price=True, timeout=price_timeout)
-            # 复用已获取的持仓数据，避免重复查询价格
-            position_data = self.get_position(holdings_data=holdings_data)
+            snapshot = snapshot or self.build_snapshot()
+            valuation = snapshot["valuation"]
+            holdings_data = snapshot["holdings_data"]
+            position_data = snapshot["position_data"]
 
             # 一次性获取全部净值历史（1 次 API 调用）
             all_navs = self.storage.get_nav_history(self.account, days=9999)
 
             # --- 合成实时虚拟净值 ---
-            # 用实时持仓市值 + 最近一次记录的份额，推算当前净值
-            # 确保即使今天未 record_nav()，收益统计也能正常计算
+            # 用统一估值结果 + 最近一次记录的份额，推算当前净值与四个派生指标
             today = date.today()
-            live_total = holdings_data.get("total_value", 0)
-            live_cash = holdings_data.get("cash_value", 0)
-            live_stock = live_total - live_cash
+            live_total = valuation.total_value_cny
+            live_cash = valuation.cash_value_cny
+            live_stock = valuation.stock_value_cny + valuation.fund_value_cny
 
-            working_navs = list(all_navs)  # 浅拷贝，不修改原始数据
+            working_navs = [n for n in all_navs if n.date < today]
+            synthetic_nav = None
             if all_navs and live_total > 0:
                 last_nav = all_navs[-1]
-                if last_nav.date < today and last_nav.shares and last_nav.shares > 0:
+                if last_nav.shares and last_nav.shares > 0:
+                    current_year = str(today.year)
+                    yesterday_nav = self.portfolio._find_latest_nav_before(all_navs, today)
+                    prev_year_end_nav = self.portfolio._find_year_end_nav(all_navs, str(today.year - 1))
+                    prev_month_end_nav = self.portfolio._find_prev_month_end_nav(all_navs, today.year, today.month)
+                    daily_cash_flow = self.portfolio._get_daily_cash_flow(self.account, today)
+                    monthly_cash_flow = self.portfolio._get_monthly_cash_flow(self.account, today.year, today.month)
+                    yearly_cash_flow = self.portfolio._get_yearly_cash_flow(self.account, current_year)
+                    if last_nav and last_nav.date < today:
+                        from datetime import timedelta
+                        gap_start = last_nav.date + timedelta(days=1)
+                        gap_cash_flow = self.portfolio._get_period_cash_flow(self.account, gap_start, today)
+                        base_shares = last_nav.shares or 0
+                        base_nav = last_nav.nav
+                    else:
+                        gap_cash_flow = daily_cash_flow
+                        base_shares = last_nav.shares or 0
+                        base_nav = last_nav.nav
+
+                    synthetic_share_change = (gap_cash_flow / base_nav) if base_nav else 0.0
+                    synthetic_shares = base_shares + synthetic_share_change
+                    synthetic_nav_value = live_total / synthetic_shares if synthetic_shares > 0 else 1.0
+                    synthetic_mtd_nav_change = self.portfolio._calc_mtd_nav_change(synthetic_nav_value, prev_month_end_nav)
+                    synthetic_ytd_nav_change = self.portfolio._calc_ytd_nav_change(synthetic_nav_value, prev_year_end_nav)
+                    synthetic_mtd_pnl = self.portfolio._calc_mtd_pnl(live_total, prev_month_end_nav, monthly_cash_flow)
+                    synthetic_ytd_pnl = self.portfolio._calc_ytd_pnl(live_total, prev_year_end_nav, yearly_cash_flow)
+                    synthetic_daily_pnl = None
+                    if yesterday_nav and yesterday_nav.date and (today - yesterday_nav.date).days == 1:
+                        synthetic_daily_pnl = live_total - yesterday_nav.total_value - gap_cash_flow
+
                     synthetic_nav = NAVHistory(
                         date=today,
                         account=self.account,
                         total_value=round(live_total, 2),
                         cash_value=round(live_cash, 2),
                         stock_value=round(live_stock, 2),
-                        shares=last_nav.shares,
-                        nav=round(live_total / last_nav.shares, 6),
+                        fund_value=round(valuation.fund_value_cny, 2),
+                        cn_stock_value=round(valuation.cn_asset_value, 2),
+                        us_stock_value=round(valuation.us_asset_value, 2),
+                        hk_stock_value=round(valuation.hk_asset_value, 2),
+                        shares=round(synthetic_shares, 2),
+                        nav=round(synthetic_nav_value, 6),
                         stock_weight=round(live_stock / live_total, 6) if live_total > 0 else 0,
                         cash_weight=round(live_cash / live_total, 6) if live_total > 0 else 0,
+                        cash_flow=round(daily_cash_flow, 2),
+                        share_change=round(synthetic_share_change, 2),
+                        mtd_nav_change=round(synthetic_mtd_nav_change, 6),
+                        ytd_nav_change=round(synthetic_ytd_nav_change, 6),
+                        pnl=round(synthetic_daily_pnl, 2) if synthetic_daily_pnl is not None else None,
+                        mtd_pnl=round(synthetic_mtd_pnl, 2),
+                        ytd_pnl=round(synthetic_ytd_pnl, 2),
+                        details={"is_synthetic": True},
                     )
                     working_navs.append(synthetic_nav)
 
@@ -983,24 +1509,44 @@ class PortfolioSkill:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def record_nav(self, price_timeout: int = 30) -> Dict[str, Any]:
+    def record_nav(self, price_timeout: int = 30, snapshot: Optional[Dict[str, Any]] = None,
+                   overwrite_existing: bool = True, dry_run: bool = False) -> Dict[str, Any]:
         """记录今日净值（独立方法，与报告生成解耦）
 
         Args:
             price_timeout: 价格获取超时时间（秒）
+            snapshot: 可复用的统一估值快照
+            overwrite_existing: 是否允许覆盖同日已有净值记录
+            dry_run: 仅演练，不实际写入
         """
         try:
-            valuation = self.portfolio.calculate_valuation(self.account)
+            snapshot = snapshot or self.build_snapshot()
+            valuation = snapshot["valuation"]
             today = date.today()
-            nav_record = self.portfolio.record_nav(self.account, valuation=valuation, nav_date=today)
-            return {
+            nav_record = self.portfolio.record_nav(
+                self.account,
+                valuation=valuation,
+                nav_date=today,
+                persist=True,
+                overwrite_existing=overwrite_existing,
+                dry_run=dry_run,
+            )
+            storage_result = None
+            result = {
                 "success": True,
                 "date": today.isoformat(),
                 "nav": nav_record.nav,
                 "total_value": nav_record.total_value,
                 "shares": nav_record.shares,
-                "message": f"已记录 {today} 净值: {nav_record.nav:.4f}"
+                "message": (f"已演练 {today} 净值写入: {nav_record.nav:.4f}" if dry_run else f"已记录 {today} 净值: {nav_record.nav:.4f}")
             }
+            result["snapshot_time"] = snapshot.get("snapshot_time")
+            result["dry_run"] = dry_run
+            if storage_result is not None:
+                result["storage"] = storage_result
+            if valuation.warnings:
+                result["warnings"] = valuation.warnings
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 

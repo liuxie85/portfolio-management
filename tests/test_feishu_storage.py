@@ -164,6 +164,22 @@ class TestFeishuStorageFieldConversion:
         assert result['avg_cost'] is None
         assert result['quantity'] == ''
 
+    def test_zero_values_are_not_dropped_in_conversion(self):
+        tx_fields = self.storage._from_feishu_fields({'amount': '0', 'fee': '0', 'tax': '0'}, 'transactions')
+        cf_fields = self.storage._from_feishu_fields({'amount': '0', 'cny_amount': '0', 'exchange_rate': '0'}, 'cash_flow')
+        price = self.storage._dict_to_price_cache({'asset_id': 'AAPL', 'price': 10.0, 'currency': 'USD', 'cny_price': 0.0, 'change': 0.0, 'change_pct': 0.0, 'exchange_rate': 0.0})
+
+        assert tx_fields['amount'] == 0.0
+        assert tx_fields['fee'] == 0.0
+        assert tx_fields['tax'] == 0.0
+        assert cf_fields['amount'] == 0.0
+        assert cf_fields['cny_amount'] == 0.0
+        assert cf_fields['exchange_rate'] == 0.0
+        assert price.cny_price == 0.0
+        assert price.change == 0.0
+        assert price.change_pct == 0.0
+        assert price.exchange_rate == 0.0
+
 
 class TestFeishuStorageEscapeFilter:
     """测试飞书存储层filter转义"""
@@ -404,6 +420,17 @@ class TestFeishuStorageHoldingOperations:
 
         self.mock_client.delete_record.assert_not_called()
 
+    def test_delete_holding_if_tiny_residual(self):
+        """测试极小残值持仓会被视为零并删除"""
+        self.mock_client.list_records.return_value = [{
+            'record_id': 'rec_123',
+            'fields': {'quantity': '0.0000000001', 'currency': 'CNY'}
+        }]
+
+        self.storage.delete_holding_if_zero('000001', '测试账户')
+
+        self.mock_client.delete_record.assert_called_once_with('holdings', 'rec_123')
+
     def test_delete_holding_by_record_id(self):
         """测试通过记录ID删除持仓"""
         self.mock_client.delete_record.return_value = True
@@ -423,6 +450,7 @@ class TestFeishuStorageTransactionOperations:
 
     def test_add_transaction(self):
         """测试添加交易记录"""
+        self.mock_client.list_records.return_value = []
         self.mock_client.create_record.return_value = {
             'record_id': 'tx_rec_123',
             'fields': {}
@@ -466,6 +494,22 @@ class TestFeishuStorageTransactionOperations:
 
         assert result.record_id == 'existing_tx'
         self.mock_client.create_record.assert_not_called()
+
+    def test_add_transaction_raises_when_idempotency_fields_missing(self):
+        tx = Transaction(
+            tx_date=date(2025, 3, 14),
+            tx_type=TransactionType.BUY,
+            asset_id='000001',
+            account='测试账户',
+            quantity=1000,
+            price=10.5,
+            currency='CNY',
+            request_id='req_123'
+        )
+        self.mock_client.list_records.side_effect = Exception('FieldNameNotFound')
+
+        with pytest.raises(ValueError, match='缺少 request_id 字段'):
+            self.storage.add_transaction(tx)
 
     def test_get_transaction(self):
         """测试获取单条交易记录"""
@@ -565,6 +609,7 @@ class TestFeishuStorageCashFlowOperations:
 
     def test_add_cash_flow(self):
         """测试添加出入金记录"""
+        self.mock_client.list_records.return_value = []
         self.mock_client.create_record.return_value = {
             'record_id': 'cf_rec_123',
             'fields': {}
@@ -582,6 +627,21 @@ class TestFeishuStorageCashFlowOperations:
         result = self.storage.add_cash_flow(cf)
 
         assert result.record_id == 'cf_rec_123'
+
+    def test_add_cash_flow_raises_when_dedup_key_field_missing(self):
+        self.mock_client.list_records.side_effect = Exception('FieldNameNotFound')
+
+        cf = CashFlow(
+            flow_date=date(2025, 3, 14),
+            account='测试账户',
+            amount=100000,
+            currency='CNY',
+            cny_amount=100000,
+            flow_type='DEPOSIT'
+        )
+
+        with pytest.raises(ValueError, match='缺少 dedup_key 字段'):
+            self.storage.add_cash_flow(cf)
 
     def test_get_cash_flow(self):
         """测试获取单条出入金记录"""

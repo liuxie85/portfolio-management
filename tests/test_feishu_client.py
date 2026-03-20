@@ -253,6 +253,8 @@ class TestFeishuClientTableOperations:
         """测试表未配置"""
         with patch.dict(os.environ, {}, clear=True):
             client = FeishuClient()
+            client.table_configs = {}
+            client.default_app_token = None
             with pytest.raises(ValueError) as exc_info:
                 client._get_table_config('holdings')
             assert '未配置表 holdings' in str(exc_info.value)
