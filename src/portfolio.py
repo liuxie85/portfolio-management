@@ -10,6 +10,7 @@ from .models import (
     CASH_ASSET_ID, MMF_ASSET_ID
 )
 from .price_fetcher import PriceFetcher
+from .reporting_utils import normalize_holding_type
 from . import config
 
 
@@ -369,6 +370,8 @@ class PortfolioManager:
 
         # 2. 获取价格（统一通过 price_fetcher，自动处理缓存）
         prices = {}
+        price_errors = []
+        normalization_warnings = []
         if self.price_fetcher:
             # 构建名称映射
             name_map = {h.asset_id: h.asset_name for h in holdings}
@@ -397,6 +400,14 @@ class PortfolioManager:
 
         for holding in holdings:
             price = prices.get(holding.asset_id, {})
+            normalized_type = normalize_holding_type(holding)
+
+            # 记录分类兜底 warning
+            raw_type = holding.asset_type.value if holding.asset_type else None
+            if normalized_type == 'cash' and raw_type not in ('cash', 'mmf') and str(holding.asset_id).upper().endswith('-CASH'):
+                warn = f"分类兜底: {holding.asset_id}: 原始 asset_type={raw_type or 'None'}，按代码后缀归一为 cash"
+                if warn not in normalization_warnings:
+                    normalization_warnings.append(warn)
 
             if price and 'price' in price:
                 # fetch_batch 返回的是字典
@@ -409,13 +420,18 @@ class PortfolioManager:
                 holding.cny_price = 1.0 if holding.currency == 'CNY' else None
                 holding.market_value_cny = holding.quantity * holding.cny_price if holding.cny_price else None
 
+                if normalized_type == 'cash' and holding.currency != 'CNY' and holding.market_value_cny is None:
+                    price_errors.append(f"{holding.asset_name}({holding.asset_id}): 无法获取汇率")
+                elif normalized_type != 'cash' and holding.quantity != 0:
+                    price_errors.append(f"{holding.asset_name}({holding.asset_id}): 价格缺失，无法可靠估值")
+
             market_value = holding.market_value_cny or 0
             total_value_cny += market_value
 
-            # 按资产类型分类
-            if holding.asset_type == AssetType.CASH:
+            # 按统一资产分类口径分类
+            if normalized_type == 'cash':
                 cash_value_cny += market_value
-            elif holding.asset_type == AssetType.FUND:
+            elif normalized_type == 'fund':
                 fund_value_cny += market_value
             else:
                 stock_value_cny += market_value
@@ -437,6 +453,10 @@ class PortfolioManager:
         total_shares = self.storage.get_total_shares(account)
         nav = total_value_cny / total_shares if total_shares > 0 else None
 
+        warnings = []
+        warnings.extend(normalization_warnings)
+        warnings.extend(price_errors)
+
         return PortfolioValuation(
             account=account,
             total_value_cny=total_value_cny,
@@ -448,13 +468,15 @@ class PortfolioManager:
             hk_asset_value=hk_asset_value,
             shares=total_shares,
             nav=nav,
-            holdings=holdings
+            holdings=holdings,
+            warnings=warnings,
         )
 
     # ========== 净值记录 ==========
 
     def record_nav(self, account: str, valuation: Optional[PortfolioValuation] = None,
-                   nav_date: Optional[date] = None) -> NAVHistory:
+                   nav_date: Optional[date] = None, persist: bool = True,
+                   overwrite_existing: bool = True, dry_run: bool = False) -> NAVHistory:
         """
         记录每日净值（按Excel账户净值sheet逻辑）
         计算字段：股票市值、现金结余、账户净值、占比、份额变动、涨幅、资产升值
@@ -536,21 +558,51 @@ class PortfolioManager:
             yearly_data=yearly_data, cumulative_cash_flow=cumulative_cash_flow,
             start_year=start_year, **calc,
         )
-        self.storage.save_nav(nav_record)
+        if persist:
+            self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
 
         # ===== 9. 打印摘要 =====
-        self._print_nav_summary(
-            today=today, stock_value=stock_value, cash_value=cash_value,
-            total_value=total_value, stock_ratio=stock_ratio, cash_ratio=cash_ratio,
-            current_year=current_year, start_year=start_year,
-            yesterday_nav=yesterday_nav, prev_year_end_nav=prev_year_end_nav,
-            prev_month_end_nav=prev_month_end_nav,
-            yearly_data=yearly_data,
-            daily_cash_flow=daily_cash_flow, cumulative_cash_flow=cumulative_cash_flow,
-            **calc,
-        )
+        if persist and not dry_run:
+            self._print_nav_summary(
+                today=today, stock_value=stock_value, cash_value=cash_value,
+                total_value=total_value, stock_ratio=stock_ratio, cash_ratio=cash_ratio,
+                current_year=current_year, start_year=start_year,
+                yesterday_nav=yesterday_nav, prev_year_end_nav=prev_year_end_nav,
+                prev_month_end_nav=prev_month_end_nav,
+                yearly_data=yearly_data,
+                daily_cash_flow=daily_cash_flow, cumulative_cash_flow=cumulative_cash_flow,
+                **calc,
+            )
 
         return nav_record
+
+    @staticmethod
+    def _calc_mtd_nav_change(nav: float, prev_month_end_nav) -> float:
+        """计算月初至今净值涨幅（基准：上月末净值）"""
+        if prev_month_end_nav and prev_month_end_nav.nav and prev_month_end_nav.nav > 0:
+            return (nav - prev_month_end_nav.nav) / prev_month_end_nav.nav
+        return 0.0
+
+    @staticmethod
+    def _calc_ytd_nav_change(nav: float, prev_year_end_nav) -> float:
+        """计算年初至今净值涨幅（基准：上一年末净值）"""
+        if prev_year_end_nav and prev_year_end_nav.nav and prev_year_end_nav.nav > 0:
+            return (nav - prev_year_end_nav.nav) / prev_year_end_nav.nav
+        return 0.0
+
+    @staticmethod
+    def _calc_mtd_pnl(total_value: float, prev_month_end_nav, monthly_cash_flow: float) -> float:
+        """计算月初至今资产升值额（基准：上月末总资产）"""
+        if prev_month_end_nav:
+            return total_value - prev_month_end_nav.total_value - monthly_cash_flow
+        return 0.0
+
+    @staticmethod
+    def _calc_ytd_pnl(total_value: float, prev_year_end_nav, yearly_cash_flow: float) -> float:
+        """计算年初至今资产升值额（基准：上一年末总资产）"""
+        if prev_year_end_nav:
+            return total_value - prev_year_end_nav.total_value - yearly_cash_flow
+        return 0.0
 
     def _calc_nav_metrics(
         self, *, account, today, total_value, yesterday_nav, prev_year_end_nav,
@@ -574,16 +626,10 @@ class PortfolioManager:
         nav = total_value / shares if shares > 0 else 1.0
 
         # -- 月初至今涨幅（基准：上月末净值） --
-        if prev_month_end_nav and prev_month_end_nav.nav and prev_month_end_nav.nav > 0:
-            month_nav_change = (nav - prev_month_end_nav.nav) / prev_month_end_nav.nav
-        else:
-            month_nav_change = 0.0
+        month_nav_change = self._calc_mtd_nav_change(nav, prev_month_end_nav)
 
         # -- 年初至今涨幅（基准：上一年末净值） --
-        if prev_year_end_nav and prev_year_end_nav.nav and prev_year_end_nav.nav > 0:
-            year_nav_change = (nav - prev_year_end_nav.nav) / prev_year_end_nav.nav
-        else:
-            year_nav_change = 0.0
+        year_nav_change = self._calc_ytd_nav_change(nav, prev_year_end_nav)
 
         # -- 各年份净值涨幅（基准：各年上一年末净值） --
         for yd in yearly_data.values():
@@ -596,17 +642,17 @@ class PortfolioManager:
         if first_year_data and first_year_data['prev_end'] and first_year_data['prev_end'].nav > 0:
             cumulative_nav_change = (nav - first_year_data['prev_end'].nav) / first_year_data['prev_end'].nav
 
-        # -- 日资产升值（使用 gap 期间全部资金变动，确保间隔期入金不被算作收益） --
-        if yesterday_nav:
+        # -- 日资产升值（仅当上一条记录恰好是前一天时才计算；否则置空） --
+        if yesterday_nav and yesterday_nav.date and (today - yesterday_nav.date).days == 1:
             daily_appreciation = total_value - yesterday_nav.total_value - cf_for_shares
         else:
-            daily_appreciation = 0.0
+            daily_appreciation = None
 
         # -- 月资产升值（基准：上月末总值） --
-        month_appreciation = (total_value - prev_month_end_nav.total_value - monthly_cash_flow) if prev_month_end_nav else 0.0
+        month_appreciation = self._calc_mtd_pnl(total_value, prev_month_end_nav, monthly_cash_flow)
 
         # -- 年资产升值（基准：上一年末总值） --
-        year_appreciation = (total_value - prev_year_end_nav.total_value - yearly_cash_flow) if prev_year_end_nav else 0.0
+        year_appreciation = self._calc_ytd_pnl(total_value, prev_year_end_nav, yearly_cash_flow)
 
         # -- 各年份资产升值 --
         initial_value = self._get_initial_value(account, all_navs=all_navs)
@@ -695,7 +741,7 @@ class PortfolioManager:
             share_change=round(shares_change, 2),
             mtd_nav_change=round(month_nav_change, 6),
             ytd_nav_change=round(year_nav_change, 6),
-            pnl=round(daily_appreciation, 2),
+            pnl=round(daily_appreciation, 2) if daily_appreciation is not None else None,
             mtd_pnl=round(month_appreciation, 2),
             ytd_pnl=round(year_appreciation, 2),
             details=details,
@@ -737,12 +783,10 @@ class PortfolioManager:
             print(f"  累计资产升值: ¥{cumulative_appreciation:,.2f} ({total_value:,.0f} - {initial_value:,.0f} - {cumulative_cash_flow:,.0f})")
 
     def _get_last_day_nav(self, account: str, current_date: date) -> Optional[NAVHistory]:
-        """获取昨日净值记录（指定日期的前一天）"""
+        """获取昨日净值记录（严格要求指定日期的前一天）"""
         from datetime import timedelta
         yesterday = current_date - timedelta(days=1)
-
-        # 使用通用方法获取
-        return self.storage.get_latest_nav_before(account, yesterday)
+        return self.storage.get_nav_on_date(account, yesterday)
 
     def _get_initial_nav(self, account: str) -> Optional[NAVHistory]:
         """获取初始净值记录（最早的记录，净值=1时的记录）"""

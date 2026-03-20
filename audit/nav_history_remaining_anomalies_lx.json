@@ -1,0 +1,410 @@
+{
+  "success": true,
+  "account": "lx",
+  "summary": {
+    "count": 28,
+    "by_field": {
+      "mtd_pnl": 4,
+      "ytd_pnl": 24
+    },
+    "by_reason": {
+      "missing_month_base": 1,
+      "value_mismatch": 16,
+      "sign_flip": 11
+    }
+  },
+  "items": [
+    {
+      "date": "2023-12-30",
+      "record_id": "rec270EDGeo1Bv",
+      "field": "mtd_pnl",
+      "stored_value": 0.0,
+      "recomputed_value": null,
+      "delta": null,
+      "pm_base_date": null,
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "missing_month_base"
+      ],
+      "suggested_action": "manual_review"
+    },
+    {
+      "date": "2024-01-30",
+      "record_id": "rec270EDGeo1tZ",
+      "field": "ytd_pnl",
+      "stored_value": -188315.35,
+      "recomputed_value": -702266.65,
+      "delta": 513951.3,
+      "pm_base_date": "2023-12-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-02-27",
+      "record_id": "rec270EDGeo1mN",
+      "field": "mtd_pnl",
+      "stored_value": 210626.92,
+      "recomputed_value": 190626.92,
+      "delta": 20000.0,
+      "pm_base_date": "2024-01-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-02-27",
+      "record_id": "rec270EDGeo1mN",
+      "field": "ytd_pnl",
+      "stored_value": 22311.57,
+      "recomputed_value": -439718.39,
+      "delta": 462029.96,
+      "pm_base_date": "2024-01-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-03-30",
+      "record_id": "rec270EDGeo1fk",
+      "field": "ytd_pnl",
+      "stored_value": 130678.65,
+      "recomputed_value": -260247.22,
+      "delta": 390925.87,
+      "pm_base_date": "2024-02-27",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-04-29",
+      "record_id": "rec270EDGeo18c",
+      "field": "ytd_pnl",
+      "stored_value": 337659.72,
+      "recomputed_value": -50266.15,
+      "delta": 387925.87,
+      "pm_base_date": "2024-03-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-05-30",
+      "record_id": "rec270EDGeo10G",
+      "field": "ytd_pnl",
+      "stored_value": 398885.44,
+      "recomputed_value": 10959.57,
+      "delta": 387925.87,
+      "pm_base_date": "2024-04-29",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-06-29",
+      "record_id": "rec270EDGeo0SM",
+      "field": "mtd_pnl",
+      "stored_value": 20161.17,
+      "recomputed_value": -9838.83,
+      "delta": 30000.0,
+      "pm_base_date": "2024-05-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-06-29",
+      "record_id": "rec270EDGeo0SM",
+      "field": "ytd_pnl",
+      "stored_value": 419046.61,
+      "recomputed_value": 81120.74,
+      "delta": 337925.87,
+      "pm_base_date": "2024-05-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-07-30",
+      "record_id": "rec270EDGeo0JJ",
+      "field": "ytd_pnl",
+      "stored_value": 300296.35,
+      "recomputed_value": -7629.52,
+      "delta": 307925.87,
+      "pm_base_date": "2024-06-29",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-08-30",
+      "record_id": "rec270EDGeo0AQ",
+      "field": "ytd_pnl",
+      "stored_value": 344498.09,
+      "recomputed_value": 36572.22,
+      "delta": 307925.87,
+      "pm_base_date": "2024-07-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-09-29",
+      "record_id": "rec270EDGeo0st",
+      "field": "ytd_pnl",
+      "stored_value": 778637.33,
+      "recomputed_value": 590711.46,
+      "delta": 187925.87,
+      "pm_base_date": "2024-08-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-10-30",
+      "record_id": "rec270EDGeo0k7",
+      "field": "ytd_pnl",
+      "stored_value": 658311.63,
+      "recomputed_value": 470385.76,
+      "delta": 187925.87,
+      "pm_base_date": "2024-09-29",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2024-11-29",
+      "record_id": "rec270EDGeo08H",
+      "field": "ytd_pnl",
+      "stored_value": 591576.2,
+      "recomputed_value": 403650.33,
+      "delta": 187925.87,
+      "pm_base_date": "2024-10-30",
+      "py_base_date": "2023-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-01-30",
+      "record_id": "rec270EDGenZRr",
+      "field": "ytd_pnl",
+      "stored_value": 62445.27,
+      "recomputed_value": -911336.48,
+      "delta": 973781.75,
+      "pm_base_date": "2024-12-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-02-27",
+      "record_id": "rec270EDGenZIN",
+      "field": "ytd_pnl",
+      "stored_value": 293547.2,
+      "recomputed_value": -570909.49,
+      "delta": 864456.69,
+      "pm_base_date": "2025-01-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-03-30",
+      "record_id": "rec270EDGenZA1",
+      "field": "ytd_pnl",
+      "stored_value": 388818.04,
+      "recomputed_value": -475638.65,
+      "delta": 864456.69,
+      "pm_base_date": "2025-02-27",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-04-29",
+      "record_id": "rec270EDGenZrz",
+      "field": "ytd_pnl",
+      "stored_value": 253301.62,
+      "recomputed_value": -311155.07,
+      "delta": 564456.69,
+      "pm_base_date": "2025-03-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-05-30",
+      "record_id": "rec270EDGenZk9",
+      "field": "ytd_pnl",
+      "stored_value": 254157.37,
+      "recomputed_value": -210299.32,
+      "delta": 464456.69,
+      "pm_base_date": "2025-04-29",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-06-29",
+      "record_id": "rec270EDGenZcQ",
+      "field": "ytd_pnl",
+      "stored_value": 284418.8,
+      "recomputed_value": 139299.45,
+      "delta": 145119.35,
+      "pm_base_date": "2025-05-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-07-30",
+      "record_id": "rec270EDGenZ5r",
+      "field": "ytd_pnl",
+      "stored_value": 613601.19,
+      "recomputed_value": 485275.19,
+      "delta": 128326.0,
+      "pm_base_date": "2025-06-29",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-08-30",
+      "record_id": "rec270EDGenYXK",
+      "field": "mtd_pnl",
+      "stored_value": 22923.25,
+      "recomputed_value": 12923.25,
+      "delta": 10000.0,
+      "pm_base_date": "2025-07-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-08-30",
+      "record_id": "rec270EDGenYXK",
+      "field": "ytd_pnl",
+      "stored_value": 636524.44,
+      "recomputed_value": 596524.44,
+      "delta": 40000.0,
+      "pm_base_date": "2025-07-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-09-29",
+      "record_id": "rec270EDGenYPu",
+      "field": "ytd_pnl",
+      "stored_value": 829117.71,
+      "recomputed_value": 799117.71,
+      "delta": 30000.0,
+      "pm_base_date": "2025-08-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-10-30",
+      "record_id": "rec270EDGenW7V",
+      "field": "ytd_pnl",
+      "stored_value": 814119.77,
+      "recomputed_value": 784119.77,
+      "delta": 30000.0,
+      "pm_base_date": "2025-09-29",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2025-11-29",
+      "record_id": "rec270EDGenVZH",
+      "field": "ytd_pnl",
+      "stored_value": 739304.38,
+      "recomputed_value": 709304.38,
+      "delta": 30000.0,
+      "pm_base_date": "2025-10-30",
+      "py_base_date": "2024-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2026-01-30",
+      "record_id": "rec270EDGenVIH",
+      "field": "ytd_pnl",
+      "stored_value": 32174.16,
+      "recomputed_value": -67825.84,
+      "delta": 100000.0,
+      "pm_base_date": "2025-12-30",
+      "py_base_date": "2025-12-30",
+      "reason_tags": [
+        "sign_flip"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    },
+    {
+      "date": "2026-02-27",
+      "record_id": "rec270EDGenVoY",
+      "field": "ytd_pnl",
+      "stored_value": -209965.97,
+      "recomputed_value": -259965.97,
+      "delta": 50000.0,
+      "pm_base_date": "2026-01-30",
+      "py_base_date": "2025-12-30",
+      "reason_tags": [
+        "value_mismatch"
+      ],
+      "suggested_action": "apply_recomputed_value"
+    }
+  ]
+}

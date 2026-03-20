@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "account": "lx",
+  "count": 2,
+  "rows": [
+    {
+      "record_id": "rec270EDGenVoY",
+      "date": "2026-02-27",
+      "stored_mtd_nav_change": -0.045976,
+      "recomputed_mtd_nav_change": 0.0,
+      "stored_ytd_nav_change": -0.040039,
+      "recomputed_ytd_nav_change": 0.0,
+      "stored_mtd_pnl": -242140.13,
+      "recomputed_mtd_pnl": 0.0,
+      "stored_ytd_pnl": -209965.97,
+      "recomputed_ytd_pnl": -150000.0
+    },
+    {
+      "record_id": "recvejiZnK6qU2",
+      "date": "2026-03-19",
+      "stored_mtd_nav_change": -0.002841,
+      "recomputed_mtd_nav_change": -0.002841,
+      "stored_ytd_nav_change": -0.042766,
+      "recomputed_ytd_nav_change": -0.002841,
+      "stored_mtd_pnl": -14553.63,
+      "recomputed_mtd_pnl": -14553.63,
+      "stored_ytd_pnl": -224519.6,
+      "recomputed_ytd_pnl": -114553.63
+    }
+  ]
+}

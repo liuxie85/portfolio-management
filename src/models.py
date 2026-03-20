@@ -299,6 +299,9 @@ class PortfolioValuation(BaseModel):
     # 持仓明细
     holdings: List[Holding] = Field(default_factory=list)
 
+    # 估值告警（如分类兜底、价格缺失、缓存回退等）
+    warnings: List[str] = Field(default_factory=list)
+
     @property
     def cash_ratio(self) -> float:
         return self.cash_value_cny / self.total_value_cny if self.total_value_cny > 0 else 0

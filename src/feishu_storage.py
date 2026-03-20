@@ -51,7 +51,7 @@ class FeishuStorage:
 
     # ========== 字段转换工具 ==========
 
-    def _to_feishu_fields(self, data: Dict, table: str) -> Dict[str, Any]:
+    def _to_feishu_fields(self, data: Dict, table: str, preserve_none: bool = False) -> Dict[str, Any]:
         """
         将 Python 字典转换为飞书多维表字段格式
 
@@ -60,6 +60,9 @@ class FeishuStorage:
         - 数字：直接传数字
         - 日期：传整数时间戳（毫秒）或字符串 "2025-03-12"
         - 复选框：传布尔值
+
+        Args:
+            preserve_none: 是否保留 None 值（用于 update 时显式清空字段）
         """
         result = {}
 
@@ -115,6 +118,8 @@ class FeishuStorage:
 
         for key, value in data.items():
             if value is None:
+                if preserve_none:
+                    result[key] = None
                 continue
 
             # asset_id 特殊处理：强制转为字符串，确保前导零不丢失
@@ -194,13 +199,23 @@ class FeishuStorage:
                     result[key] = value
 
             elif table == 'nav_history':
-                if key in ['total_value', 'cash_value', 'stock_value', 'fund_value',
-                          'cn_stock_value', 'us_stock_value', 'hk_stock_value',
-                          'stock_weight', 'cash_weight', 'shares', 'nav',
-                          'cash_flow', 'share_change',
-                          'mtd_nav_change', 'ytd_nav_change',
-                          'pnl', 'mtd_pnl', 'ytd_pnl'] and value:
-                    result[key] = self._parse_float(value) or 0.0
+                nav_required_fields = {
+                    'total_value', 'cash_value', 'stock_value', 'fund_value',
+                    'cn_stock_value', 'us_stock_value', 'hk_stock_value'
+                }
+                nav_optional_numeric_fields = {
+                    'stock_weight', 'cash_weight', 'shares', 'nav',
+                    'cash_flow', 'share_change',
+                    'mtd_nav_change', 'ytd_nav_change',
+                    'pnl', 'mtd_pnl', 'ytd_pnl'
+                }
+
+                if key in nav_required_fields:
+                    parsed = self._parse_float(value)
+                    result[key] = parsed if parsed is not None else 0.0
+                elif key in nav_optional_numeric_fields:
+                    # 关键可选数值字段严禁把空值偷偷补成 0.0；None 和 0 语义不同
+                    result[key] = self._parse_float(value)
                 elif key == 'details' and value:
                     try:
                         result[key] = json.loads(value) if isinstance(value, str) else value
@@ -906,19 +921,56 @@ class FeishuStorage:
 
     # ========== nav_history 净值历史操作 ==========
 
-    def save_nav(self, nav: NAVHistory):
-        """保存净值记录"""
-        # 检查是否已存在
+    def save_nav(self, nav: NAVHistory, overwrite_existing: bool = True, dry_run: bool = False):
+        """保存净值记录
+
+        兼容不同 nav_history 表结构：若目标表缺少部分扩展字段（如 details），
+        在首次写入失败时自动剔除未知字段并重试。
+        写入前强制将日期标准化为纯 date，避免时分秒/时区导致的重复问题。
+
+        Args:
+            overwrite_existing: 是否允许覆盖同日已有记录
+            dry_run: 仅演练，不实际写入
+        """
+        if isinstance(nav.date, datetime):
+            nav.date = nav.date.date()
+        elif isinstance(nav.date, str):
+            nav.date = datetime.strptime(nav.date[:10], '%Y-%m-%d').date()
+
         existing = self.get_nav_on_date(nav.account, nav.date)
+        if existing and existing.record_id and not overwrite_existing:
+            raise ValueError(f"nav_history 已存在同日记录，拒绝覆盖: account={nav.account}, date={nav.date}")
 
         fields = self._nav_to_dict(nav)
-        feishu_fields = self._to_feishu_fields(fields, 'nav_history')
+        # 更新时需要保留 None，显式清空旧值；创建时继续过滤 None
+        feishu_fields = self._to_feishu_fields(fields, 'nav_history', preserve_none=bool(existing and existing.record_id))
+
+        if dry_run:
+            return {"existing": bool(existing and existing.record_id), "fields": feishu_fields}
+
+        try:
+            if existing and existing.record_id:
+                self.client.update_record('nav_history', existing.record_id, feishu_fields)
+                nav.record_id = existing.record_id
+            else:
+                result = self.client.create_record('nav_history', feishu_fields)
+                nav.record_id = result['record_id']
+            return
+        except Exception as e:
+            msg = str(e)
+            if 'FieldNameNotFound' not in msg:
+                raise
+
+        # 降级重试：剔除新表中不存在的扩展字段
+        fallback_fields = dict(feishu_fields)
+        for k in ['details']:
+            fallback_fields.pop(k, None)
 
         if existing and existing.record_id:
-            self.client.update_record('nav_history', existing.record_id, feishu_fields)
+            self.client.update_record('nav_history', existing.record_id, fallback_fields)
             nav.record_id = existing.record_id
         else:
-            result = self.client.create_record('nav_history', feishu_fields)
+            result = self.client.create_record('nav_history', fallback_fields)
             nav.record_id = result['record_id']
 
     def get_nav_history(self, account: str, days: int = 365) -> List[NAVHistory]:
@@ -960,19 +1012,35 @@ class FeishuStorage:
         return navs[0] if navs else None
 
     def get_nav_on_date(self, account: str, nav_date: date) -> Optional[NAVHistory]:
-        """获取指定日期的净值记录"""
-        # 飞书日期字段不支持比较操作符，获取全部后客户端筛选
+        """获取指定日期的净值记录（按纯日期匹配）"""
+        if isinstance(nav_date, datetime):
+            nav_date = nav_date.date()
+        elif isinstance(nav_date, str):
+            nav_date = datetime.strptime(nav_date[:10], '%Y-%m-%d').date()
+
         filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
         records = self.client.list_records('nav_history', filter_str=filter_str)
 
+        matches = []
         for record in records:
             fields = self._from_feishu_fields(record['fields'], 'nav_history')
             fields['record_id'] = record['record_id']
             nav = self._dict_to_nav(fields)
             if nav.date == nav_date:
-                return nav
+                matches.append(nav)
 
-        return None
+        if len(matches) > 1:
+            print(f"[警告] nav_history 存在重复日期记录: account={account}, date={nav_date}, count={len(matches)}")
+
+        return matches[0] if matches else None
+
+    def update_nav_fields(self, record_id: str, fields: Dict[str, Any], dry_run: bool = False):
+        """更新 nav_history 指定字段。"""
+        feishu_fields = self._to_feishu_fields(fields, 'nav_history', preserve_none=True)
+        if dry_run:
+            return {"record_id": record_id, "fields": feishu_fields}
+        self.client.update_record('nav_history', record_id, feishu_fields)
+        return {"record_id": record_id, "fields": feishu_fields}
 
     def get_latest_nav_before(self, account: str, before_date: date) -> Optional[NAVHistory]:
         """获取指定日期之前的最新净值记录"""
@@ -1019,7 +1087,6 @@ class FeishuStorage:
             'share_change': nav.share_change,
             'mtd_nav_change': nav.mtd_nav_change,
             'ytd_nav_change': nav.ytd_nav_change,
-            'pnl': nav.pnl,
             'mtd_pnl': nav.mtd_pnl,
             'ytd_pnl': nav.ytd_pnl,
             'details': nav.details,
@@ -1029,10 +1096,10 @@ class FeishuStorage:
         """字典转 NAVHistory"""
         nav_date = data.get('date')
         if isinstance(nav_date, (int, float)):
-            # 飞书日期字段返回 Unix 时间戳（毫秒）
-            nav_date = datetime.fromtimestamp(nav_date / 1000).date()
+            # 飞书日期字段返回 Unix 时间戳（毫秒），按 UTC 纯日期解析，避免本地时区漂移
+            nav_date = datetime.utcfromtimestamp(nav_date / 1000).date()
         elif isinstance(nav_date, str):
-            nav_date = datetime.strptime(nav_date, '%Y-%m-%d').date()
+            nav_date = datetime.strptime(nav_date[:10], '%Y-%m-%d').date()
 
         def _opt_float(key):
             v = data.get(key)

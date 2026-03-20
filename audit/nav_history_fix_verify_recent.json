@@ -1,0 +1,66 @@
+[
+  {
+    "record_id": "rec270EDGenYXK",
+    "date": "2025-08-30",
+    "mtd_nav_change": 0.004523,
+    "ytd_nav_change": 0.162038,
+    "mtd_pnl": 22923.25,
+    "ytd_pnl": 636524.44
+  },
+  {
+    "record_id": "rec270EDGenYPu",
+    "date": "2025-09-29",
+    "mtd_nav_change": 0.037753,
+    "ytd_nav_change": 0.205908,
+    "mtd_pnl": 202593.27,
+    "ytd_pnl": 829117.71
+  },
+  {
+    "record_id": "rec270EDGenW7V",
+    "date": "2025-10-30",
+    "mtd_nav_change": -0.00287,
+    "ytd_nav_change": 0.202447,
+    "mtd_pnl": -14997.94,
+    "ytd_pnl": 814119.77
+  },
+  {
+    "record_id": "rec270EDGenVZH",
+    "date": "2025-11-29",
+    "mtd_nav_change": -0.014125,
+    "ytd_nav_change": 0.185462,
+    "mtd_pnl": -74815.39,
+    "ytd_pnl": 739304.38
+  },
+  {
+    "record_id": "rec270EDGenVRS",
+    "date": "2025-12-30",
+    "mtd_nav_change": -0.018062,
+    "ytd_nav_change": 0.164051,
+    "mtd_pnl": -94269.34,
+    "ytd_pnl": 645035.04
+  },
+  {
+    "record_id": "rec270EDGenVIH",
+    "date": "2026-01-30",
+    "mtd_nav_change": 0.006224,
+    "ytd_nav_change": 0.006224,
+    "mtd_pnl": 32174.16,
+    "ytd_pnl": 32174.16
+  },
+  {
+    "record_id": "rec270EDGenVoY",
+    "date": "2026-02-27",
+    "mtd_nav_change": -0.045976,
+    "ytd_nav_change": -0.040039,
+    "mtd_pnl": -242140.13,
+    "ytd_pnl": -209965.97
+  },
+  {
+    "record_id": "recvejiZnK6qU2",
+    "date": "2026-03-19",
+    "mtd_nav_change": -0.002291,
+    "ytd_nav_change": -0.042238,
+    "mtd_pnl": -11757.63,
+    "ytd_pnl": -221723.6
+  }
+]

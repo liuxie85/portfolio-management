@@ -167,6 +167,21 @@ class PriceFetcher:
         expired_cache = {}  # 记录过期缓存，用于 fallback
 
         for code in codes:
+            normalized_code = (code or '').upper().strip()
+
+            # 现金/货基优先直接生成价格，避免在缓存回退路径中漏掉外币现金汇率
+            if normalized_code == 'CASH' or normalized_code.endswith('-CASH'):
+                try:
+                    results[code] = self._get_cash_price(normalized_code)
+                    continue
+                except Exception:
+                    # 如果实时汇率失败，再走后续缓存/回退逻辑
+                    pass
+
+            if normalized_code.endswith('-MMF'):
+                results[code] = self._get_mmf_price(normalized_code)
+                continue
+
             if self.use_cache:
                 from .models import PriceCache
                 cached = self.storage.get_price(code)
