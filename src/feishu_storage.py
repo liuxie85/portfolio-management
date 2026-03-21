@@ -4,7 +4,7 @@
 """
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -20,6 +20,7 @@ from .local_cache import LocalPriceCache
 class FeishuStorage:
     """飞书多维表存储层 (带内存缓存优化)"""
 
+    FEISHU_DATE_TZ = timezone(timedelta(hours=8))
     MONEY_QUANT = Decimal('0.01')
     NAV_QUANT = Decimal('0.000001')
     WEIGHT_QUANT = Decimal('0.000001')
@@ -841,7 +842,7 @@ class FeishuStorage:
         """字典转 Transaction"""
         tx_date = data.get('tx_date')
         if isinstance(tx_date, (int, float)):
-            tx_date = datetime.fromtimestamp(tx_date / 1000).date()
+            tx_date = datetime.fromtimestamp(tx_date / 1000, tz=self.FEISHU_DATE_TZ).date()
         elif isinstance(tx_date, str):
             tx_date = datetime.strptime(tx_date, '%Y-%m-%d').date()
 
@@ -972,7 +973,7 @@ class FeishuStorage:
         """字典转 CashFlow"""
         flow_date = data.get('flow_date')
         if isinstance(flow_date, (int, float)):
-            flow_date = datetime.fromtimestamp(flow_date / 1000).date()
+            flow_date = datetime.fromtimestamp(flow_date / 1000, tz=self.FEISHU_DATE_TZ).date()
         elif isinstance(flow_date, str):
             flow_date = datetime.strptime(flow_date, '%Y-%m-%d').date()
 
@@ -1174,8 +1175,8 @@ class FeishuStorage:
         """字典转 NAVHistory"""
         nav_date = data.get('date')
         if isinstance(nav_date, (int, float)):
-            # 飞书日期字段返回 Unix 时间戳（毫秒），按 UTC 纯日期解析，避免本地时区漂移
-            nav_date = datetime.utcfromtimestamp(nav_date / 1000).date()
+            # 飞书日期字段返回 Unix 时间戳（毫秒），按业务时区解析，避免东八区日期被截成前一天
+            nav_date = datetime.fromtimestamp(nav_date / 1000, tz=self.FEISHU_DATE_TZ).date()
         elif isinstance(nav_date, str):
             nav_date = datetime.strptime(nav_date[:10], '%Y-%m-%d').date()
 
