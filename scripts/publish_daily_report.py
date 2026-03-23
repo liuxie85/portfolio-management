@@ -206,7 +206,7 @@ ul{{margin:0;padding-left:20px;color:var(--muted)}}
     <div class='big'>{fmt_money(total_value)}</div>
     <div class='sub'>今日净值 NAV {nav:.6f} · 份额 {shares if shares is not None else '--'}</div>
     <div class='grid'>
-      <div class='card'><div class='label'>较昨日</div><div class='value {'kpi-up' if (daily_return or 0) >= 0 else 'kpi-down'}>{fmt_opt_pct(daily_return)}</div><div class='sub'>ΔNAV {fmt_opt_nav_delta(daily_change)} · 当日盈亏(估) {fmt_opt_money(est_daily_pnl)}</div></div>
+      <div class='card'><div class='label'>较昨日</div><div class='value {'kpi-up' if (daily_return or 0) >= 0 else 'kpi-down'}'>{fmt_opt_pct(daily_return)}</div><div class='sub'>ΔNAV {fmt_opt_nav_delta(daily_change)} · 当日盈亏(估) {fmt_opt_money(est_daily_pnl)}</div></div>
       <div class='card'><div class='label'>当日资金变动</div><div class='value'>{fmt_money(cash_flow)}</div></div>
       <div class='card'><div class='label'>权益仓位</div><div class='value'>{fmt_pct(equity_ratio)}</div><div class='sub'>现金 {fmt_pct(cash_ratio)}</div></div>
       <div class='card'><div class='label'>成立以来年化</div><div class='value'>{cagr_pct:.2f}%</div></div>
@@ -217,10 +217,10 @@ ul{{margin:0;padding-left:20px;color:var(--muted)}}
     <div class='card'>
       <div class='label'>收益概览</div>
       <div class='grid' style='margin-top:8px'>
-        <div><div class='label'>本月收益率</div><div class='value-sm {'kpi-up' if (mtd_nav_change or 0) >= 0 else 'kpi-down'}>{fmt_opt_pct(mtd_nav_change)}</div></div>
-        <div><div class='label'>年内收益率</div><div class='value-sm {'kpi-up' if (ytd_nav_change or 0) >= 0 else 'kpi-down'}>{fmt_opt_pct(ytd_nav_change)}</div></div>
-        <div><div class='label'>本月收益额</div><div class='value-sm {'kpi-up' if (mtd_pnl or 0) >= 0 else 'kpi-down'}>{fmt_opt_money(mtd_pnl)}</div></div>
-        <div><div class='label'>年内收益额</div><div class='value-sm {'kpi-up' if (ytd_pnl or 0) >= 0 else 'kpi-down'}>{fmt_opt_money(ytd_pnl)}</div></div>
+        <div><div class='label'>本月收益率</div><div class='value-sm {'kpi-up' if (mtd_nav_change or 0) >= 0 else 'kpi-down'}'>{fmt_opt_pct(mtd_nav_change)}</div></div>
+        <div><div class='label'>年内收益率</div><div class='value-sm {'kpi-up' if (ytd_nav_change or 0) >= 0 else 'kpi-down'}'>{fmt_opt_pct(ytd_nav_change)}</div></div>
+        <div><div class='label'>本月收益额</div><div class='value-sm {'kpi-up' if (mtd_pnl or 0) >= 0 else 'kpi-down'}'>{fmt_opt_money(mtd_pnl)}</div></div>
+        <div><div class='label'>年内收益额</div><div class='value-sm {'kpi-up' if (ytd_pnl or 0) >= 0 else 'kpi-down'}'>{fmt_opt_money(ytd_pnl)}</div></div>
       </div>
     </div>
     <div class='card'>
