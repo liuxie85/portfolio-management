@@ -79,6 +79,13 @@ def fmt_opt_money(v: Any) -> str:
     return fmt_money(float(v))
 
 
+def fmt_opt_nav_delta(v: Any) -> str:
+    """Format NAV delta as a plain number (not money)."""
+    if v is None:
+        return "--"
+    return f"{float(v):+.6f}"
+
+
 def type_label(v: str) -> str:
     return {
         "a_stock": "A股",
@@ -144,6 +151,8 @@ def render_daily_report_html(report_bundle: dict[str, Any], config: PublishConfi
     prev_nav = history[-2].get("nav") if len(history) >= 2 else None
     daily_change = (nav - float(prev_nav)) if prev_nav not in (None, 0) else None
     daily_return = ((nav / float(prev_nav)) - 1) if prev_nav not in (None, 0) else None
+    # Estimated daily PnL in CNY when cash_flow is 0: delta_NAV * shares
+    est_daily_pnl = (float(daily_change) * float(shares)) if (daily_change is not None and shares not in (None, 0, "")) else None
 
     rows = []
     for h in top[:10]:
@@ -197,7 +206,7 @@ ul{{margin:0;padding-left:20px;color:var(--muted)}}
     <div class='big'>{fmt_money(total_value)}</div>
     <div class='sub'>今日净值 NAV {nav:.6f} · 份额 {shares if shares is not None else '--'}</div>
     <div class='grid'>
-      <div class='card'><div class='label'>昨日对比</div><div class='value {'kpi-up' if (daily_return or 0) >= 0 else 'kpi-down'}>{fmt_opt_pct(daily_return)}</div><div class='sub'>净值变动 {fmt_opt_money(daily_change)}</div></div>
+      <div class='card'><div class='label'>较昨日</div><div class='value {'kpi-up' if (daily_return or 0) >= 0 else 'kpi-down'}>{fmt_opt_pct(daily_return)}</div><div class='sub'>ΔNAV {fmt_opt_nav_delta(daily_change)} · 当日盈亏(估) {fmt_opt_money(est_daily_pnl)}</div></div>
       <div class='card'><div class='label'>当日资金变动</div><div class='value'>{fmt_money(cash_flow)}</div></div>
       <div class='card'><div class='label'>权益仓位</div><div class='value'>{fmt_pct(equity_ratio)}</div><div class='sub'>现金 {fmt_pct(cash_ratio)}</div></div>
       <div class='card'><div class='label'>成立以来年化</div><div class='value'>{cagr_pct:.2f}%</div></div>
