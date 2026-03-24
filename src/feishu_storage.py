@@ -715,11 +715,10 @@ class FeishuStorage:
         if cached_record_id:
             # 缓存命中，直接查询记录详情
             try:
-                record = self.client.get_record('transactions', cached_record_id)
-                if record:
-                    fields = self._from_feishu_fields(record['fields'], 'transactions')
-                    fields['record_id'] = record['record_id']
-                    return self._dict_to_transaction(fields)
+                record = self.client.get_record_strict('transactions', cached_record_id)
+                fields = self._from_feishu_fields(record['fields'], 'transactions')
+                fields['record_id'] = record['record_id']
+                return self._dict_to_transaction(fields)
             except Exception:
                 # 缓存记录可能已删除，清除缓存后回退到查询模式
                 self._request_id_cache.pop(request_id, None)
@@ -757,7 +756,7 @@ class FeishuStorage:
         if cached_record_id:
             # 缓存命中，验证记录是否仍存在
             try:
-                record = self.client.get_record(table, cached_record_id)
+                record = self.client.get_record_strict(table, cached_record_id)
                 if record:
                     return cached_record_id
             except Exception:
@@ -782,8 +781,9 @@ class FeishuStorage:
 
     def get_transaction(self, record_id: str) -> Optional[Transaction]:
         """获取单条交易记录（通过 record_id）"""
-        record = self.client.get_record('transactions', record_id)
-        if not record:
+        try:
+            record = self.client.get_record_strict('transactions', record_id)
+        except Exception:
             return None
 
         fields = self._from_feishu_fields(record['fields'], 'transactions')
@@ -914,8 +914,9 @@ class FeishuStorage:
 
     def get_cash_flow(self, record_id: str) -> Optional[CashFlow]:
         """获取单条出入金记录"""
-        record = self.client.get_record('cash_flow', record_id)
-        if not record:
+        try:
+            record = self.client.get_record_strict('cash_flow', record_id)
+        except Exception:
             return None
 
         fields = self._from_feishu_fields(record['fields'], 'cash_flow')
