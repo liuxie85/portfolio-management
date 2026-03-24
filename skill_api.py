@@ -1510,19 +1510,34 @@ class PortfolioSkill:
             return {"success": False, "error": str(e)}
 
     def record_nav(self, price_timeout: int = 30, snapshot: Optional[Dict[str, Any]] = None,
-                   overwrite_existing: bool = True, dry_run: bool = False) -> Dict[str, Any]:
+                   overwrite_existing: bool = True, dry_run: bool = True,
+                   confirm: bool = False) -> Dict[str, Any]:
         """记录今日净值（独立方法，与报告生成解耦）
+
+        ⚠️ 安全约束：默认 dry_run=True，避免被日报/调试调用误写入历史。
+        只有在 confirm=True 且 dry_run=False 时才会真正写入。
 
         Args:
             price_timeout: 价格获取超时时间（秒）
             snapshot: 可复用的统一估值快照
             overwrite_existing: 是否允许覆盖同日已有净值记录
-            dry_run: 仅演练，不实际写入
+            dry_run: 仅演练，不实际写入（默认 True）
+            confirm: 明确确认写入（默认 False）
         """
         try:
             snapshot = snapshot or self.build_snapshot()
             valuation = snapshot["valuation"]
             today = date.today()
+
+            if (not dry_run) and (not confirm):
+                return {
+                    "success": False,
+                    "error": "Refuse to write nav_history without confirm=True (safety guard).",
+                    "date": today.isoformat(),
+                    "dry_run": dry_run,
+                    "confirm": confirm,
+                }
+
             nav_record = self.portfolio.record_nav(
                 self.account,
                 valuation=valuation,
@@ -1748,9 +1763,19 @@ def full_report(price_timeout: int = 30) -> Dict:
     """
     return _get_default_skill().full_report(price_timeout=price_timeout)
 
-def record_nav(price_timeout: int = 30) -> Dict:
-    """记录今日净值"""
-    return _get_default_skill().record_nav(price_timeout=price_timeout)
+def record_nav(price_timeout: int = 30, dry_run: bool = True, confirm: bool = False,
+               overwrite_existing: bool = True) -> Dict:
+    """记录今日净值
+
+    ⚠️ 默认 dry_run=True，避免误写入。
+    真正写入必须传：dry_run=False 且 confirm=True。
+    """
+    return _get_default_skill().record_nav(
+        price_timeout=price_timeout,
+        dry_run=dry_run,
+        confirm=confirm,
+        overwrite_existing=overwrite_existing,
+    )
 
 # 价格
 def get_price(code: str) -> Dict:

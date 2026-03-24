@@ -278,14 +278,14 @@ class NAVHistory(BaseModel):
 
     # 市值分解
     total_value: float
-    cash_value: float = 0.0
-    stock_value: float = 0.0
-    fund_value: float = 0.0
+    cash_value: Optional[float] = None
+    stock_value: Optional[float] = None
+    fund_value: Optional[float] = None
 
     # 区域分布
-    cn_stock_value: float = 0.0
-    us_stock_value: float = 0.0
-    hk_stock_value: float = 0.0
+    cn_stock_value: Optional[float] = None
+    us_stock_value: Optional[float] = None
+    hk_stock_value: Optional[float] = None
 
     # 仓位占比
     stock_weight: Optional[float] = None
@@ -317,6 +317,9 @@ class NAVHistory(BaseModel):
     )
     @classmethod
     def quantize_money_fields(cls, v):
+        # keep None as None; do not manufacture 0
+        if v is None:
+            return None
         return _quantize_decimal(v, MONEY_QUANT)
 
     @field_validator('nav', 'mtd_nav_change', 'ytd_nav_change', mode='before')

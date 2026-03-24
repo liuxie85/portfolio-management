@@ -757,7 +757,10 @@ class PortfolioManager:
             shares_change_dec = cf_for_shares_dec
             shares_dec = total_value_dec
 
+        # Quantize nav to NAV_QUANT early, so derived fields (mtd/ytd) are consistent with stored nav.
         nav_dec = (total_value_dec / shares_dec) if shares_dec > 0 else Decimal('1.0')
+        nav_dec = self._quantize_nav(nav_dec)
+
         shares_change = float(shares_change_dec)
         shares = float(shares_dec)
         nav = float(nav_dec)
@@ -842,6 +845,21 @@ class PortfolioManager:
         return abs(cls._to_decimal(a) - cls._to_decimal(b)) <= cls._to_decimal(tolerance)
 
     @classmethod
+    def _approx_equal_quantized(cls, a: Optional[float], b: Optional[float], quantizer, *, tolerance: float = 0.0) -> bool:
+        """Compare two numbers after applying the same quantizer.
+
+        This avoids false negatives where one side is quantized (e.g., stored field) and
+        the other is raw computed (e.g., expected_*), which can differ by one quant unit.
+        """
+        if a is None or b is None:
+            return a is b
+        qa = quantizer(a)
+        qb = quantizer(b)
+        if tolerance and tolerance > 0:
+            return cls._approx_equal(float(qa), float(qb), tolerance=tolerance)
+        return qa == qb
+
+    @classmethod
     def _money_equal(cls, a: Optional[float], b: Optional[float]) -> bool:
         if a is None or b is None:
             return a is b
@@ -863,10 +881,17 @@ class PortfolioManager:
         """对即将写入的 NAV 记录做运行时自校验，防止不自洽数据静默落库。"""
         errors = []
 
-        # 1. 总值分解必须一致
-        expected_total = float(self._quantize_money(self._to_decimal(nav_record.stock_value or 0.0) + self._to_decimal(nav_record.cash_value or 0.0)))
-        if not self._approx_equal(nav_record.total_value, expected_total, tolerance=0.01):
-            errors.append(f"total_value 不等于 stock_value + cash_value: {nav_record.total_value} != {expected_total}")
+        # 1. 总值分解必须一致（从今天起强制拆分字段必填）
+        # cash_value/stock_value are mandatory for any new NAV record.
+        if nav_record.cash_value is None or nav_record.stock_value is None:
+            errors.append("cash_value/stock_value 缺失（必填）")
+        else:
+            expected_total = float(self._quantize_money(
+                self._to_decimal(nav_record.stock_value) + self._to_decimal(nav_record.cash_value)
+            ))
+            # Allow tiny rounding drift (fen-level). Use 0.06 to avoid false negatives across quantization chains.
+            if not self._approx_equal(nav_record.total_value, expected_total, tolerance=0.06):
+                errors.append(f"total_value 不等于 stock_value + cash_value: {nav_record.total_value} != {expected_total}")
 
         # 2. 仓位权重之和应接近 1
         if nav_record.total_value and nav_record.total_value > 0 and nav_record.stock_weight is not None and nav_record.cash_weight is not None:
@@ -891,15 +916,12 @@ class PortfolioManager:
 
         # 5. 月/年净值涨幅与基准一致
         expected_mtd = self._calc_mtd_nav_change(nav_record.nav, prev_month_end_nav) if nav_record.nav is not None else None
-        if expected_mtd is not None:
-            expected_mtd = float(self._quantize_nav(expected_mtd))
-        if not self._nav_equal(nav_record.mtd_nav_change, expected_mtd):
+        # compare after quantization to avoid one-quant false negatives
+        if not self._approx_equal_quantized(nav_record.mtd_nav_change, expected_mtd, self._quantize_nav):
             errors.append(f"mtd_nav_change 不一致: {nav_record.mtd_nav_change} != {expected_mtd}")
 
         expected_ytd = self._calc_ytd_nav_change(nav_record.nav, prev_year_end_nav) if nav_record.nav is not None else None
-        if expected_ytd is not None:
-            expected_ytd = float(self._quantize_nav(expected_ytd))
-        if not self._nav_equal(nav_record.ytd_nav_change, expected_ytd):
+        if not self._approx_equal_quantized(nav_record.ytd_nav_change, expected_ytd, self._quantize_nav):
             errors.append(f"ytd_nav_change 不一致: {nav_record.ytd_nav_change} != {expected_ytd}")
 
         # 6. 月/年资产升值与基准一致

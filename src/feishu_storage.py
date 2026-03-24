@@ -1105,8 +1105,24 @@ class FeishuStorage:
 
         return matches[0] if matches else None
 
-    def update_nav_fields(self, record_id: str, fields: Dict[str, Any], dry_run: bool = False):
-        """更新 nav_history 指定字段。"""
+    def update_nav_fields(
+        self,
+        record_id: str,
+        fields: Dict[str, Any],
+        dry_run: bool = False,
+        allowed_fields: Optional[set] = None,
+    ):
+        """更新 nav_history 指定字段（patch 语义）。
+
+        Safety:
+        - If allowed_fields is provided, reject any key not in the whitelist.
+        - Always preserve_none=True so callers can intentionally clear fields.
+        """
+        if allowed_fields is not None:
+            illegal = [k for k in fields.keys() if k not in allowed_fields]
+            if illegal:
+                raise ValueError(f"update_nav_fields: illegal field(s): {illegal}. allowed={sorted(list(allowed_fields))}")
+
         normalized = {}
         for k, v in fields.items():
             if k in ('mtd_nav_change', 'ytd_nav_change') and v is not None:
@@ -1115,6 +1131,7 @@ class FeishuStorage:
                 normalized[k] = self._quantize_money(v)
             else:
                 normalized[k] = v
+
         feishu_fields = self._to_feishu_fields(normalized, 'nav_history', preserve_none=True)
         if dry_run:
             return {"record_id": record_id, "fields": feishu_fields}
@@ -1166,6 +1183,7 @@ class FeishuStorage:
             'share_change': nav.share_change,
             'mtd_nav_change': nav.mtd_nav_change,
             'ytd_nav_change': nav.ytd_nav_change,
+            'pnl': nav.pnl,
             'mtd_pnl': nav.mtd_pnl,
             'ytd_pnl': nav.ytd_pnl,
             'details': nav.details,
@@ -1191,12 +1209,12 @@ class FeishuStorage:
             record_id=data.get('record_id'),
             account=data.get('account', ''),
             total_value=FeishuStorage._parse_float(data.get('total_value')) or 0.0,
-            cash_value=FeishuStorage._parse_float(data.get('cash_value')) or 0.0,
-            stock_value=FeishuStorage._parse_float(data.get('stock_value')) or 0.0,
-            fund_value=FeishuStorage._parse_float(data.get('fund_value')) or 0.0,
-            cn_stock_value=FeishuStorage._parse_float(data.get('cn_stock_value')) or 0.0,
-            us_stock_value=FeishuStorage._parse_float(data.get('us_stock_value')) or 0.0,
-            hk_stock_value=FeishuStorage._parse_float(data.get('hk_stock_value')) or 0.0,
+            cash_value=_opt_float('cash_value'),
+            stock_value=_opt_float('stock_value'),
+            fund_value=_opt_float('fund_value'),
+            cn_stock_value=_opt_float('cn_stock_value'),
+            us_stock_value=_opt_float('us_stock_value'),
+            hk_stock_value=_opt_float('hk_stock_value'),
             stock_weight=_opt_float('stock_weight'),
             cash_weight=_opt_float('cash_weight'),
             shares=_opt_float('shares'),
