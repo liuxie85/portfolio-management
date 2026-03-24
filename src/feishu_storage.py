@@ -188,7 +188,9 @@ class FeishuStorage:
             if isinstance(value, datetime):
                 result[key] = int(value.timestamp() * 1000)
             elif isinstance(value, date):
-                result[key] = int(datetime.combine(value, datetime.min.time()).timestamp() * 1000)
+                # Interpret date as business date in FEISHU_DATE_TZ (Beijing) to avoid cross-day drift.
+                dt = datetime.combine(value, datetime.min.time(), tzinfo=self.FEISHU_DATE_TZ)
+                result[key] = int(dt.timestamp() * 1000)
             # 枚举转换
             elif isinstance(value, (AssetType, TransactionType, AssetClass, Industry)):
                 result[key] = value.value
@@ -260,8 +262,11 @@ class FeishuStorage:
                     result[key] = value
 
             elif table == 'nav_history':
-                nav_required_fields = {
-                    'total_value', 'cash_value', 'stock_value', 'fund_value',
+                # nav_history numeric fields: do NOT manufacture zeros.
+                # total_value is required; breakdown fields may be missing in legacy history.
+                nav_must_fields = {'total_value'}
+                nav_breakdown_fields = {
+                    'cash_value', 'stock_value', 'fund_value',
                     'cn_stock_value', 'us_stock_value', 'hk_stock_value'
                 }
                 nav_optional_numeric_fields = {
@@ -271,9 +276,12 @@ class FeishuStorage:
                     'pnl', 'mtd_pnl', 'ytd_pnl'
                 }
 
-                if key in nav_required_fields:
+                if key in nav_must_fields:
                     parsed = self._parse_float(value)
-                    result[key] = self._normalize_numeric_field(table, key, parsed) if parsed is not None else 0.0
+                    result[key] = self._normalize_numeric_field(table, key, parsed) if parsed is not None else None
+                elif key in nav_breakdown_fields:
+                    parsed = self._parse_float(value)
+                    result[key] = self._normalize_numeric_field(table, key, parsed) if parsed is not None else None
                 elif key in nav_optional_numeric_fields:
                     # 关键可选数值字段严禁把空值偷偷补成 0.0；None 和 0 语义不同
                     parsed = self._parse_float(value)
@@ -347,9 +355,13 @@ class FeishuStorage:
         return value.replace('\\', '\\\\').replace('"', '\\"')
 
     @staticmethod
-    def _date_to_timestamp_ms(d: date) -> int:
-        """将 date 转换为 Unix 时间戳（毫秒），用于飞书日期字段过滤"""
-        return int(datetime.combine(d, datetime.min.time()).timestamp() * 1000)
+    def _date_to_timestamp_ms(self, d: date) -> int:
+        """将业务 date 转换为 Unix 时间戳（毫秒），用于飞书日期字段过滤。
+
+        按业务语义，date 解释为北京时间(UTC+8)的 00:00。
+        """
+        dt = datetime.combine(d, datetime.min.time(), tzinfo=self.FEISHU_DATE_TZ)
+        return int(dt.timestamp() * 1000)
 
     # ========== holdings 持仓操作 ==========
 
