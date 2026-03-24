@@ -214,30 +214,37 @@ class FeishuClient:
         return records
 
     def get_record(self, table_name: str, record_id: str) -> Optional[Dict]:
-        """获取单条记录"""
+        """获取单条记录（宽松模式）。
+
+        Notes:
+        - This method returns None on errors to preserve backward compatibility.
+        - Prefer get_record_strict() for write-paths where "None" is dangerous.
+        """
         try:
-            app_token, table_id = self._get_table_config(table_name)
-        except ValueError:
+            return self.get_record_strict(table_name, record_id)
+        except Exception:
             return None
 
+    def get_record_strict(self, table_name: str, record_id: str) -> Dict:
+        """获取单条记录（严格模式）：任何错误直接抛出。"""
+        app_token, table_id = self._get_table_config(table_name)
         endpoint = f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
 
-        try:
-            data = self._request('GET', endpoint)
-            # API returns {'record': {...}} for get_record
-            rec = data.get('record') if isinstance(data, dict) else None
-            if rec and isinstance(rec, dict):
-                return {
-                    'record_id': rec.get('record_id'),
-                    'fields': rec.get('fields')
-                }
-            # fallback (defensive)
+        data = self._request('GET', endpoint)
+        # API returns {'record': {...}} for get_record
+        rec = data.get('record') if isinstance(data, dict) else None
+        if rec and isinstance(rec, dict):
+            return {
+                'record_id': rec.get('record_id'),
+                'fields': rec.get('fields')
+            }
+        # fallback (defensive)
+        if isinstance(data, dict) and ('record_id' in data or 'fields' in data):
             return {
                 'record_id': data.get('record_id'),
                 'fields': data.get('fields')
             }
-        except Exception:
-            return None
+        raise ValueError(f"Unexpected get_record response shape for table={table_name}: {data}")
 
     # 各表必填字段定义（用于验证）
     REQUIRED_FIELDS = {
