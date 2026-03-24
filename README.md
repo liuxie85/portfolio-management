@@ -27,6 +27,22 @@
 - **美股**：Finnhub + Yahoo Finance + yfinance
 - **存储**：飞书多维表（Bitable API）
 
+## 🔐 SSH / Deploy Key 自检（强烈推荐）
+
+如果你在 **重启 OpenClaw / 重启容器 / 换机器** 后发现无法 `git push` / 无法创建 PR，先跑自检脚本：
+
+```bash
+cd /home/node/.openclaw/workspace/portfolio-management
+scripts/ssh_selfcheck.sh
+```
+
+脚本会：
+- 检查本机 deploy key 是否存在（`/home/node/.openclaw/secrets/ssh/portfolio-management/`）
+- 输出需要添加到 GitHub Deploy keys 的 **pubkey**（直接复制粘贴）
+- 验证 `ssh -T git@github.com` 与 `git ls-remote` 是否可用
+
+---
+
 ## 快速开始
 
 ### 1. 安装依赖
