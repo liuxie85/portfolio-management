@@ -433,8 +433,8 @@ class SQLiteStorage:
                     pnl=?, mtd_pnl=?, ytd_pnl=?, details=? WHERE record_id=?
                     """,
                     (
-                        nav.total_value, nav.cash_value, nav.stock_value, nav.fund_value,
-                        nav.cn_stock_value, nav.us_stock_value, nav.hk_stock_value, nav.stock_weight,
+                        nav.total_value, nav.cash_value or 0.0, nav.stock_value or 0.0, nav.fund_value or 0.0,
+                        nav.cn_stock_value or 0.0, nav.us_stock_value or 0.0, nav.hk_stock_value or 0.0, nav.stock_weight,
                         nav.cash_weight, nav.shares, nav.nav, nav.cash_flow, nav.share_change,
                         nav.mtd_nav_change, nav.ytd_nav_change, nav.pnl, nav.mtd_pnl, nav.ytd_pnl,
                         details, existing.record_id,
@@ -453,9 +453,9 @@ class SQLiteStorage:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        record_id, nav.date.isoformat(), nav.account, nav.total_value, nav.cash_value,
-                        nav.stock_value, nav.fund_value, nav.cn_stock_value, nav.us_stock_value,
-                        nav.hk_stock_value, nav.stock_weight, nav.cash_weight, nav.shares, nav.nav,
+                        record_id, nav.date.isoformat(), nav.account, nav.total_value, nav.cash_value or 0.0,
+                        nav.stock_value or 0.0, nav.fund_value or 0.0, nav.cn_stock_value or 0.0, nav.us_stock_value or 0.0,
+                        nav.hk_stock_value or 0.0, nav.stock_weight, nav.cash_weight, nav.shares, nav.nav,
                         nav.cash_flow, nav.share_change, nav.mtd_nav_change, nav.ytd_nav_change,
                         nav.pnl, nav.mtd_pnl, nav.ytd_pnl, details,
                     ),

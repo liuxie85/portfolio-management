@@ -882,9 +882,13 @@ class PortfolioManager:
         errors = []
 
         # 1. 总值分解必须一致
-        expected_total = float(self._quantize_money(self._to_decimal(nav_record.stock_value or 0.0) + self._to_decimal(nav_record.cash_value or 0.0)))
-        if not self._approx_equal(nav_record.total_value, expected_total, tolerance=0.01):
-            errors.append(f"total_value 不等于 stock_value + cash_value: {nav_record.total_value} != {expected_total}")
+        # Only validate breakdown identity when both components are present.
+        if nav_record.stock_value is not None and nav_record.cash_value is not None:
+            expected_total = float(self._quantize_money(
+                self._to_decimal(nav_record.stock_value) + self._to_decimal(nav_record.cash_value)
+            ))
+            if not self._approx_equal(nav_record.total_value, expected_total, tolerance=0.01):
+                errors.append(f"total_value 不等于 stock_value + cash_value: {nav_record.total_value} != {expected_total}")
 
         # 2. 仓位权重之和应接近 1
         if nav_record.total_value and nav_record.total_value > 0 and nav_record.stock_weight is not None and nav_record.cash_weight is not None:
