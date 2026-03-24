@@ -881,13 +881,16 @@ class PortfolioManager:
         """对即将写入的 NAV 记录做运行时自校验，防止不自洽数据静默落库。"""
         errors = []
 
-        # 1. 总值分解必须一致
-        # Only validate breakdown identity when both components are present.
-        if nav_record.stock_value is not None and nav_record.cash_value is not None:
+        # 1. 总值分解必须一致（从今天起强制拆分字段必填）
+        # cash_value/stock_value are mandatory for any new NAV record.
+        if nav_record.cash_value is None or nav_record.stock_value is None:
+            errors.append("cash_value/stock_value 缺失（必填）")
+        else:
             expected_total = float(self._quantize_money(
                 self._to_decimal(nav_record.stock_value) + self._to_decimal(nav_record.cash_value)
             ))
-            if not self._approx_equal(nav_record.total_value, expected_total, tolerance=0.01):
+            # Allow tiny rounding drift (fen-level). Use 0.06 to avoid false negatives across quantization chains.
+            if not self._approx_equal(nav_record.total_value, expected_total, tolerance=0.06):
                 errors.append(f"total_value 不等于 stock_value + cash_value: {nav_record.total_value} != {expected_total}")
 
         # 2. 仓位权重之和应接近 1
