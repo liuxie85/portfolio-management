@@ -77,18 +77,34 @@ def parse_futu_fill_message(message: str, default_market: str = "富途") -> Par
     tx_date = None
     tx_time = None
     currency = None
+    currency_reason = None
     if m4:
         y, mo, d, t = m4.group(1), m4.group(2), m4.group(3), m4.group(4)
         tx_date = f"{y}-{mo}-{d}"
         tx_time = t
-        currency = "HKD"  # Futu HK timestamp implies HK channel; price currency depends on asset
 
-    # Prefer currency from ticker suffix if present
-    # e.g. FUTU.US -> USD
-    if asset_id and asset_id.endswith('.US'):
-        currency = 'USD'
-    elif asset_id and asset_id.endswith('.HK'):
+    # Currency inference priority:
+    # 1) ticker suffix (most reliable)
+    # 2) venue hint (e.g. "香港") as fallback only
+    if asset_id:
+        if asset_id.endswith('.US'):
+            currency = 'USD'
+            currency_reason = 'ticker_suffix:.US'
+        elif asset_id.endswith('.HK'):
+            currency = 'HKD'
+            currency_reason = 'ticker_suffix:.HK'
+        elif asset_id.endswith('.SH') or asset_id.endswith('.SZ'):
+            currency = 'CNY'
+            currency_reason = 'ticker_suffix:.SH/.SZ'
+
+    if currency is None:
+        if '香港' in raw or '富途证券(香港' in raw or '富途证券（香港' in raw:
+            currency = 'HKD'
+            currency_reason = 'venue_hint:HK'
+
+    if currency is None:
         currency = 'HKD'
+        currency_reason = 'default:HKD'
 
     tx_type = 'BUY' if action == '买入' else 'SELL'
 
@@ -99,10 +115,10 @@ def parse_futu_fill_message(message: str, default_market: str = "富途") -> Par
         asset_id=asset_id,
         quantity=qty,
         price=price,
-        currency=currency or 'HKD',
+        currency=currency,
         market=default_market,
         tx_date=tx_date,
         tx_time=tx_time,
         request_id=_mk_request_id(raw),
-        raw=raw,
+        raw=raw + (f" [currency_reason={currency_reason}]" if currency_reason else ""),
     )
