@@ -44,7 +44,7 @@ class FeishuClient:
         # 方式1（统一base）：FEISHU_APP_TOKEN=bascnxxx + FEISHU_TABLE_HOLDINGS=tblxxx
         # 方式2（分表base）：FEISHU_TABLE_HOLDINGS=bascnxxx/tblxxx
         self.table_configs = {}
-        for table_name in ['holdings', 'transactions', 'price_cache', 'nav_history', 'cash_flow']:
+        for table_name in ['holdings', 'transactions', 'price_cache', 'nav_history', 'cash_flow', 'holdings_snapshot']:
             value = config.get(f"feishu.tables.{table_name}")
             if value:
                 if '/' in value:
@@ -252,7 +252,9 @@ class FeishuClient:
         'transactions': ['tx_date', 'tx_type', 'asset_id', 'account', 'quantity', 'price'],
         'cash_flow': ['flow_date', 'account', 'amount', 'currency'],
         'nav_history': ['date', 'account', 'total_value', 'shares', 'nav'],
-        'price_cache': ['asset_id', 'price', 'currency', 'cny_price']
+        'price_cache': ['asset_id', 'price', 'currency', 'cny_price'],
+        # Per-NAV-date holdings snapshot for audit/repro.
+        'holdings_snapshot': ['as_of', 'account', 'asset_id', 'market', 'quantity', 'currency', 'price', 'cny_price', 'market_value_cny', 'dedup_key'],
     }
 
     def create_record(self, table_name: str, fields: Dict[str, Any]) -> Dict:

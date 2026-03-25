@@ -15,7 +15,8 @@
       "holdings": "",
       "transactions": "",
       "nav_history": "",
-      "cash_flow": ""
+      "cash_flow": "",
+      "holdings_snapshot": ""
     }
   }
 }

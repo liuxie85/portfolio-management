@@ -131,16 +131,25 @@ class FeishuStorage:
                 'avg_cost': True,
             },
             'transactions': {
-                'quantity': False,  # transactions 表的数字字段是文本类型
-                'price': False,
-                'amount': False,
-                'fee': False,
-                # Note: 'tax' 字段飞书表中可能不存在，作为可选字段处理
+                # NOTE: Feishu transactions table stores numeric fields as Number.
+                'quantity': True,
+                'price': True,
+                'amount': True,
+                'fee': True,
+                # 'tax' 字段飞书表中可能不存在，作为可选字段处理
             },
             'cash_flow': {
-                'amount': False,
-                'cny_amount': False,
-                'exchange_rate': False,
+                # NOTE: Feishu cash_flow table stores numeric fields as Number.
+                'amount': True,
+                'cny_amount': True,
+                'exchange_rate': True,
+            },
+            'holdings_snapshot': {
+                'quantity': True,
+                'avg_cost': True,
+                'price': True,
+                'cny_price': True,
+                'market_value_cny': True,
             },
             'nav_history': {
                 'total_value': True,
@@ -184,13 +193,17 @@ class FeishuStorage:
                 result[key] = str(value)
                 continue
 
-            # 日期转换：飞书日期字段使用 Unix 时间戳（毫秒）
+            # 日期转换：飞书日期字段使用 Unix 时间戳（毫秒）或字符串（取决于表字段类型）
             if isinstance(value, datetime):
                 result[key] = int(value.timestamp() * 1000)
             elif isinstance(value, date):
-                # Interpret date as business date in FEISHU_DATE_TZ (Beijing) to avoid cross-day drift.
-                dt = datetime.combine(value, datetime.min.time(), tzinfo=self.FEISHU_DATE_TZ)
-                result[key] = int(dt.timestamp() * 1000)
+                # transactions.tx_date is Text in Feishu; use YYYY-MM-DD to match schema.
+                if table == 'transactions' and key == 'tx_date':
+                    result[key] = value.strftime('%Y-%m-%d')
+                else:
+                    # Interpret date as business date in FEISHU_DATE_TZ (Beijing) to avoid cross-day drift.
+                    dt = datetime.combine(value, datetime.min.time(), tzinfo=self.FEISHU_DATE_TZ)
+                    result[key] = int(dt.timestamp() * 1000)
             # 枚举转换
             elif isinstance(value, (AssetType, TransactionType, AssetClass, Industry)):
                 result[key] = value.value
@@ -823,6 +836,7 @@ class FeishuStorage:
 
     def _transaction_to_dict(self, tx: Transaction) -> Dict:
         """Transaction 转字典"""
+        # NOTE: keep this dict aligned with Feishu schema (see schema audit).
         result = {
             'tx_date': tx.tx_date,
             'tx_type': tx.tx_type,
@@ -836,19 +850,13 @@ class FeishuStorage:
             'amount': tx.amount,
             'currency': tx.currency,
             'fee': tx.fee,
-            'related_account': tx.related_account,
             'remark': tx.remark,
-            'source': tx.source,
+            # Feishu schema fields (optional)
+            'request_id': tx.request_id,
+            'dedup_key': tx.dedup_key,
         }
-        # 可选字段：飞书表中可能不存在这些字段
-        if tx.request_id:
-            result['request_id'] = tx.request_id
-        if tx.dedup_key:
-            result['dedup_key'] = tx.dedup_key
-        # tax 字段：仅当值有效时写入（飞书表可能不存在此字段）
-        if tx.tax is not None:
-            result['tax'] = tx.tax
-        return result
+        # Filter out empty values to reduce FieldNameNotFound risk and keep Feishu clean.
+        return {k: v for k, v in result.items() if v is not None and v != ''}
 
     def _dict_to_transaction(self, data: Dict) -> Transaction:
         """字典转 Transaction"""
