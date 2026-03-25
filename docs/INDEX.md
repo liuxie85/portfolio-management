@@ -18,6 +18,8 @@ Keep docs short, executable, and reality-checked.
 
 ## Diagnostics / runbooks
 
+- Environment doctor: `scripts/doctor.py`
+- Schema doctor (Feishu fields vs docs/schema.md): `scripts/schema_doctor.py`
 - Pricing diagnosis: `scripts/diagnose_pricing.py`
 
 ## Schema truth source
@@ -34,12 +36,16 @@ Keep docs short, executable, and reality-checked.
 
 ## Common commands
 
+- Environment doctor (deps + network + Feishu sanity):
+  - `python scripts/doctor.py`
+
+- Schema doctor (compare live Feishu fields with docs/schema.md):
+  - `python scripts/schema_doctor.py`
+  - `python scripts/schema_doctor.py --json`
+
 - Diagnose pricing behavior (cache vs realtime vs fallback):
   - `python scripts/diagnose_pricing.py --account lx`
   - `python scripts/diagnose_pricing.py --account lx --json`
 
 - Publish daily report:
   - `python scripts/publish_daily_report.py`
-
-- (Planned) Schema doctor:
-  - `python scripts/schema_doctor.py`
