@@ -17,6 +17,8 @@ import time
 import random
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
+
+from .time_utils import bj_now_naive
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import threading
@@ -150,8 +152,8 @@ class PriceFetcher:
             market_type = _detect_market_type_func(code)
             ttl = MarketTimeUtil.get_cache_ttl(market_type)
 
-            # 计算过期时间
-            expires_at = datetime.now() + timedelta(seconds=ttl)
+            # 计算过期时间（北京时间 naive）
+            expires_at = bj_now_naive() + timedelta(seconds=ttl)
 
             # 检测资产类型
             asset_type = AssetType.OTHER
@@ -231,7 +233,7 @@ class PriceFetcher:
                     if cached.expires_at:
                         try:
                             expire_dt = datetime.fromisoformat(cached.expires_at.replace('Z', '+00:00')) if isinstance(cached.expires_at, str) else cached.expires_at
-                            is_expired = expire_dt <= datetime.now()
+                            is_expired = expire_dt <= bj_now_naive()
                         except:
                             pass
 
@@ -789,8 +791,8 @@ class PriceFetcher:
 
             data = {
                 'rates': rates,
-                'timestamp': datetime.now().isoformat(),
-                'cached_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'timestamp': bj_now_naive().isoformat(),
+                'cached_at': bj_now_naive().strftime('%Y-%m-%d %H:%M:%S')
             }
             with open(RATE_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -810,7 +812,7 @@ class PriceFetcher:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import time
 
-        now = datetime.now()
+        now = bj_now_naive()
 
         # 1. 检查内存缓存 (24小时)
         if self._rate_cache_time and (now - self._rate_cache_time).total_seconds() < 86400:
@@ -1056,7 +1058,7 @@ class PriceFetcher:
                 'change': float(data['涨跌额']) if pd.notna(data['涨跌额']) else 0.0,
                 'change_pct': float(data['涨跌幅']) if pd.notna(data['涨跌幅']) else 0.0,
                 'volume': float(data['成交量']) if pd.notna(data['成交量']) else 0.0,
-                'time': data.get('时间', datetime.now().strftime('%H:%M:%S')),
+                'time': data.get('时间', bj_now_naive().strftime('%H:%M:%S')),
                 'currency': 'CNY',
                 'cny_price': float(data['最新价']) if pd.notna(data['最新价']) else 0.0,
                 'market_type': 'cn',
@@ -1174,7 +1176,7 @@ class PriceFetcher:
                 'change': float(data['涨跌额']) if pd.notna(data['涨跌额']) else 0.0,
                 'change_pct': float(data['涨跌幅']) if pd.notna(data['涨跌幅']) else 0.0,
                 'volume': float(data['成交量']) if pd.notna(data['成交量']) else 0.0,
-                'time': data.get('时间', datetime.now().strftime('%H:%M:%S')),
+                'time': data.get('时间', bj_now_naive().strftime('%H:%M:%S')),
                 'currency': 'HKD',
                 'cny_price': price * hkd_cny,
                 'exchange_rate': hkd_cny,

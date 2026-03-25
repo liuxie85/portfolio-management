@@ -5,7 +5,9 @@
 合并了原 skill_api.py、portfolio.py、price_fetcher.py 中的重复逻辑。
 """
 import re
-from datetime import date, datetime
+from datetime import datetime
+
+from .time_utils import bj_today
 from typing import Optional, Tuple
 
 from .models import AssetType, AssetClass
@@ -155,15 +157,15 @@ def detect_market_type(code: str) -> Optional[str]:
     return None
 
 
-def parse_date(date_str: Optional[str]) -> date:
-    """解析日期字符串，空值返回今天"""
+def parse_date(date_str: Optional[str]):
+    """解析日期字符串，空值返回今天（北京时间）"""
     if not date_str:
-        return date.today()
+        return bj_today()
     try:
         return datetime.strptime(date_str, '%Y-%m-%d').date()
     except ValueError:
-        print(f"日期格式错误: {date_str}, 使用今天")
-        return date.today()
+        print(f"日期格式错误: {date_str}, 使用今天(北京时间)")
+        return bj_today()
 
 
 def _is_cash_code(code: str) -> bool:

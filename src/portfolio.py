@@ -2,6 +2,8 @@
 组合计算逻辑
 """
 from datetime import date, datetime
+
+from .time_utils import bj_today
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Optional
 
@@ -586,7 +588,7 @@ class PortfolioManager:
         if valuation is None:
             valuation = self.calculate_valuation(account)
 
-        today = nav_date or date.today()
+        today = nav_date or bj_today()
         current_year = today.strftime('%Y')
         start_year = config.get_start_year()
 

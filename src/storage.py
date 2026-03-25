@@ -1,11 +1,10 @@
-"""存储后端工厂：按配置创建后端；auto 模式下若 Feishu 不可用则显式失败，避免静默分裂写入。"""
+"""存储后端工厂：仅保留 Feishu 多维表作为唯一存储后端。"""
 from __future__ import annotations
 
 from typing import Optional
 
 from . import config
 from .feishu_storage import FeishuStorage
-from .sqlite_storage import SQLiteStorage
 
 
 def _feishu_healthcheck(storage: FeishuStorage) -> None:
@@ -19,21 +18,19 @@ def _feishu_healthcheck(storage: FeishuStorage) -> None:
 
 
 def create_storage(prefer: Optional[str] = None):
+    """创建存储后端。
+
+    兼容历史参数：prefer / storage.backend 仍可传入，但只接受 feishu/auto。
+    传入 sqlite 将直接报错，避免误用。
+    """
     backend = (prefer or config.get_storage_backend() or 'auto').lower()
 
-    if backend == 'sqlite':
-        return SQLiteStorage()
+    if backend in ('sqlite',):
+        raise ValueError("SQLite 后端已移除：当前仅支持 Feishu 多维表存储")
 
-    if backend == 'feishu':
-        return FeishuStorage()
+    if backend not in ('feishu', 'auto'):
+        raise ValueError(f"不支持的 storage.backend={backend}：当前仅支持 feishu/auto")
 
-    # auto 模式：优先飞书；若不可用则显式失败，避免静默回退造成数据写入分裂。
-    try:
-        storage = FeishuStorage()
-        _feishu_healthcheck(storage)
-        return storage
-    except Exception as e:
-        raise RuntimeError(
-            f"[存储] auto 模式下 Feishu 不可用，已拒绝静默回退 SQLite 以避免数据分裂。"
-            f"请修复 Feishu 配置/权限，或显式设置 storage.backend=sqlite。原始错误: {e}"
-        ) from e
+    storage = FeishuStorage()
+    _feishu_healthcheck(storage)
+    return storage

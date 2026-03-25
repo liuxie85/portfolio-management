@@ -2,7 +2,7 @@
 数据模型 (Pydantic v2)
 
 变更记录:
-- 删除所有 SQLite 遗留字段 (id)
+- 删除遗留字段 (id)
 - 删除未使用的计算字段 (pnl, current_price, weight)
 - 新增 dedup_key 防重字段 (Transaction, CashFlow)
 - Holding.market 默认值从 None 改为 ""
@@ -10,6 +10,7 @@
 - 新增 dedup_key 生成工具函数
 """
 import hashlib
+import uuid
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
@@ -392,12 +393,34 @@ class PortfolioValuation(BaseModel):
 def make_tx_dedup_key(tx: Transaction) -> str:
     """生成交易记录的防重指纹
 
-    基于 (account, tx_date, tx_type, asset_id, quantity, price) 生成 SHA256 前16位。
-    同一天、同一资产、同一价格和数量的交易会生成相同的 key。
-    如需区分，调用方应传入不同的 request_id。
+    设计目标：
+    - 允许“同一天同一笔资产多笔交易”。
+    - 默认幂等仍成立：相同 request_id 视为同一笔请求；无 request_id 时，通过 dedup_key 抑制“完全重复提交”。
+
+    规则：
+    - 若调用方提供 request_id：dedup_key 基于 request_id（稳定、可重放、且天然区分多笔）。
+    - 否则：dedup_key 基于 (account, tx_date, tx_type, asset_id, quantity, price, fee)。
+
+    说明：
+    - 这样同一天同一资产但不同数量/价格/手续费的多笔交易会自然区分。
+    - 若需要区分“完全相同的两笔”（例如拆单但参数完全一致），应显式传入不同的 request_id。
     """
-    raw = f"{tx.account}|{tx.tx_date}|{tx.tx_type.value}|{tx.asset_id}|{tx.quantity}|{tx.price}"
+    if tx.request_id:
+        raw = f"RID|{tx.account}|{tx.request_id}"
+    else:
+        raw = f"{tx.account}|{tx.tx_date}|{tx.tx_type.value}|{tx.asset_id}|{tx.quantity}|{tx.price}|{tx.fee}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def make_request_id(prefix: str = "tx") -> str:
+    """生成一个可用于交易幂等性的 request_id。
+
+    用途：当用户/上层调用未提供 request_id 时，Skill 可自动生成，
+    使“同一天同一资产多笔交易”可写入，同时仍可避免无意的重复提交。
+
+    说明：这里使用时间戳作为轻量唯一性来源（避免引入额外依赖）。
+    """
+    return f"{prefix}_{uuid.uuid4().hex}"
 
 
 def make_cf_dedup_key(cf: CashFlow) -> str:

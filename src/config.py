@@ -56,7 +56,6 @@ def get(key: str, default=None):
     env_map = {
         "account": "PORTFOLIO_ACCOUNT",
         "storage.backend": "PORTFOLIO_STORAGE_BACKEND",
-        "storage.sqlite_path": "PORTFOLIO_SQLITE_PATH",
         "feishu.app_token": "FEISHU_APP_TOKEN",
         "feishu.app_id": "FEISHU_APP_ID",
         "feishu.app_secret": "FEISHU_APP_SECRET",
@@ -66,6 +65,7 @@ def get(key: str, default=None):
         "feishu.tables.price_cache": "FEISHU_TABLE_PRICE_CACHE",
         "feishu.tables.nav_history": "FEISHU_TABLE_NAV_HISTORY",
         "feishu.tables.cash_flow": "FEISHU_TABLE_CASH_FLOW",
+        "feishu.tables.holdings_snapshot": "FEISHU_TABLE_HOLDINGS_SNAPSHOT",
         "finnhub_api_key": "FINNHUB_API_KEY",
     }
 
@@ -120,10 +120,5 @@ def get_data_dir() -> Path:
 
 
 def get_storage_backend() -> str:
-    """获取存储后端：auto | feishu | sqlite"""
+    """获取存储后端：auto | feishu（兼容历史配置；sqlite 已移除）"""
     return str(get("storage.backend", "auto")).lower()
-
-
-def get_sqlite_path() -> str:
-    """获取 SQLite 数据库路径"""
-    return str(get("storage.sqlite_path", get_project_root() / ".data" / "portfolio.db"))

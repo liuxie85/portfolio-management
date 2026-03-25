@@ -1,11 +1,11 @@
 """
 市场交易时间工具模块
 
-从 price_fetcher.py 提取，零外部依赖（仅 pytz）。
+从 price_fetcher.py 提取，零外部依赖（标准库 zoneinfo）。
 提供各市场开盘判断和智能缓存 TTL 计算。
 """
 from datetime import datetime, timedelta
-import pytz
+from zoneinfo import ZoneInfo
 
 from .models import MarketType
 
@@ -14,8 +14,8 @@ class MarketTimeUtil:
     """市场交易时间工具"""
 
     # 时区定义
-    TZ_SHANGHAI = pytz.timezone('Asia/Shanghai')
-    TZ_NEW_YORK = pytz.timezone('America/New_York')
+    TZ_SHANGHAI = ZoneInfo('Asia/Shanghai')
+    TZ_NEW_YORK = ZoneInfo('America/New_York')
 
     @classmethod
     def is_cn_market_open(cls, dt: datetime = None) -> bool:

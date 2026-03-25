@@ -1,6 +1,6 @@
 """
 飞书多维表存储层
-替代 SQLite Storage，支持双向同步
+作为唯一存储后端（已移除 SQLite 后端）
 """
 import json
 import re
@@ -11,7 +11,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from .models import (
     Holding, Transaction, CashFlow, NAVHistory, PriceCache,
     AssetType, TransactionType, AssetClass, Industry,
-    make_tx_dedup_key, make_cf_dedup_key, DATETIME_FORMAT
+    make_tx_dedup_key, make_cf_dedup_key, make_request_id, DATETIME_FORMAT
 )
 from .snapshot_models import HoldingSnapshot
 from .feishu_client import FeishuClient
@@ -464,9 +464,9 @@ class FeishuStorage:
 
     def upsert_holding(self, holding: Holding) -> Holding:
         """插入或更新持仓 (带内存缓存优化)"""
-        from datetime import datetime
+        from .time_utils import bj_now_naive
 
-        now = datetime.now()
+        now = bj_now_naive()
         cache_key = self._get_holding_cache_key(
             holding.asset_id, holding.account, holding.market
         )
@@ -559,7 +559,7 @@ class FeishuStorage:
 
     def update_holding_quantity(self, asset_id: str, account: str, quantity_change: float, market: Optional[str] = None):
         """更新持仓数量"""
-        from datetime import datetime
+        from .time_utils import bj_now_naive
 
         holding = self.get_holding(asset_id, account, market)
         if not holding or not holding.record_id:
@@ -569,7 +569,7 @@ class FeishuStorage:
         new_quantity = self._quantize_money(holding.quantity + quantity_change) if is_cash_like else (holding.quantity + quantity_change)
         update_fields = {
             'quantity': new_quantity,
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'updated_at': bj_now_naive().strftime('%Y-%m-%d %H:%M:%S')
         }
         self.client.update_record('holdings', holding.record_id, update_fields)
 
@@ -597,7 +597,7 @@ class FeishuStorage:
 
     def _holding_to_dict(self, holding: Holding) -> Dict:
         """Holding 转字典"""
-        from datetime import datetime
+        from .time_utils import bj_now_naive
 
         result = {
             'asset_id': holding.asset_id,
@@ -614,7 +614,7 @@ class FeishuStorage:
         }
 
         # 处理时间戳
-        now = datetime.now()
+        now = bj_now_naive()
         if holding.created_at:
             result['created_at'] = holding.created_at.strftime(DATETIME_FORMAT)
         if holding.updated_at:
@@ -679,7 +679,10 @@ class FeishuStorage:
         1. request_id: 调用方传入的幂等键
         2. dedup_key: 内容指纹，自动生成
         """
-        # 自动生成 dedup_key
+        # 自动生成 request_id / dedup_key
+        # 目标：允许同一天同一资产多笔交易，同时保持幂等性可控。
+        if not tx.request_id:
+            tx.request_id = make_request_id(prefix="tx")
         if not tx.dedup_key:
             tx.dedup_key = make_tx_dedup_key(tx)
 
@@ -1161,7 +1164,8 @@ class FeishuStorage:
     def get_nav_history(self, account: str, days: int = 365) -> List[NAVHistory]:
         """获取净值历史"""
         from datetime import timedelta
-        start_date = date.today() - timedelta(days=days)
+        from .time_utils import bj_today
+        start_date = bj_today() - timedelta(days=days)
 
         # 飞书日期字段不支持 >=/<= 比较操作符，只用 account 过滤，日期在客户端筛选
         filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'

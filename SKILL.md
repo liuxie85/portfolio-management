@@ -224,7 +224,7 @@ get_holdings(include_price=True)
 | date_str | str | 否 | 交易日期，默认今天 |
 | market | str | 否 | 券商/平台，默认"平安证券" |
 | fee | float | 否 | 手续费，默认 0 |
-| request_id | str | 否 | 幂等键，防重复提交 |
+| request_id | str | 否 | 幂等键：同一个 request_id 重复提交会被视为同一笔；不传时系统会自动生成，以允许同日同资产多笔交易 |
 
 **返回**:
 ```json
@@ -251,12 +251,15 @@ from skill_api import buy
 buy(code="600519", name="贵州茅台", quantity=100, price=1500)
 
 # 带日期和券商
-buy(code="600519", name="贵州茅台", quantity=100, price=1500,
+buy(code="600519", name="600519", quantity=100, price=1500,
     date_str="2025-03-01", market="平安证券", fee=5)
 
-# 带幂等键（防止重复提交）
-buy(code="600519", name="贵州茅台", quantity=100, price=1500,
+# 带幂等键（防止重复提交；同一个 request_id 只会记一次）
+buy(code="600519", name="600519", quantity=100, price=1500,
     request_id="order_20250317_001")
+
+# 不传 request_id：系统会自动生成一个（允许同日同资产多笔交易写入）
+buy(code="600519", name="600519", quantity=100, price=1500)
 ```
 
 ---
@@ -276,7 +279,7 @@ buy(code="600519", name="贵州茅台", quantity=100, price=1500,
 | date_str | str | 否 | 交易日期，默认今天 |
 | market | str | 否 | 券商/平台 |
 | fee | float | 否 | 手续费，默认 0 |
-| request_id | str | 否 | 幂等键 |
+| request_id | str | 否 | 幂等键：同一个 request_id 重复提交会被视为同一笔；不传时系统会自动生成，以允许同日同资产多笔交易 |
 
 **返回**:
 ```json
@@ -607,9 +610,10 @@ clean_data(table='transactions', code='TEST', dry_run=False)
 | 表名 | 说明 | 业务主键 |
 |------|------|----------|
 | holdings | 持仓表 | (asset_id, account, market) |
-| transactions | 交易记录表 | dedup_key + request_id |
+| transactions | 交易记录表 | request_id（幂等键） + dedup_key（内容指纹） |
 | cash_flow | 出入金记录表 | dedup_key |
 | nav_history | 净值历史表 | (account, date) |
+| holdings_snapshot | 持仓快照表（用于审计/可复算） | dedup_key（建议形如 account:YYYY-MM-DD:market:asset_id） |
 
 ---
 
@@ -618,3 +622,14 @@ clean_data(table='transactions', code='TEST', dry_run=False)
 - **日期字段**: 不支持比较操作符（>=, <=），客户端过滤
 - **QPS 限制**: 20 QPS，内置限流 + 重试
 - **批量操作**: 单次最多 500 条
+
+---
+
+## 时区约定（重要）
+
+本项目所有“业务日期”（交易日期 tx_date、出入金日期 flow_date、净值日期 date、快照 as_of）都按 **北京时间（Asia/Shanghai, UTC+8）** 理解。
+
+- 外部输入：`date_str` 一律按 `YYYY-MM-DD` 解析为北京时间的业务日期。
+- 生成默认日期：未传 `date_str` 时，以“北京时间 today”为准（避免服务器在 UTC 时区导致跨日）。
+- 飞书日期字段：与飞书交互的 Unix 时间戳（毫秒）按 UTC+8 解析/生成，避免 00:00 边界被截成前一天。
+

@@ -8,6 +8,8 @@ import json
 import threading
 import time
 from datetime import datetime
+
+from .time_utils import bj_now_naive
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -115,7 +117,7 @@ class LocalPriceCache:
 
             # 检查过期时间
             expires_at = data.get('expires_at', '')
-            now = datetime.now().strftime(DATETIME_FORMAT)
+            now = bj_now_naive().strftime(DATETIME_FORMAT)
 
             if expires_at and expires_at < now:
                 self._delete_unlocked(asset_id, _flush=True)
@@ -164,7 +166,7 @@ class LocalPriceCache:
                 'exchange_rate': price.exchange_rate,
                 'data_source': price.data_source,
                 'expires_at': expires_at_str,
-                'updated_at': datetime.now().strftime(DATETIME_FORMAT)
+                'updated_at': bj_now_naive().strftime(DATETIME_FORMAT)
             }
             self._dirty_count += 1
             self._dirty_flag = True
@@ -200,7 +202,7 @@ class LocalPriceCache:
         """获取所有未过期的价格缓存 - 线程安全"""
         with self._lock:
             results = []
-            now = datetime.now().strftime(DATETIME_FORMAT)
+            now = bj_now_naive().strftime(DATETIME_FORMAT)
             expired_ids = []
 
             cache_items = list(self._cache.items())
@@ -242,7 +244,7 @@ class LocalPriceCache:
     def clear_expired(self):
         """清理所有过期缓存 - 线程安全"""
         with self._lock:
-            now = datetime.now().strftime(DATETIME_FORMAT)
+            now = bj_now_naive().strftime(DATETIME_FORMAT)
             expired_ids = [
                 asset_id for asset_id, data in self._cache.items()
                 if data.get('expires_at') and data['expires_at'] < now

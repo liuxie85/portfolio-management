@@ -9,6 +9,8 @@ import sys
 import json
 from pathlib import Path
 from datetime import date, datetime, timedelta
+
+from src.time_utils import bj_today, bj_now_naive
 from typing import Dict, Any, Optional
 
 # 确保能 import 到 src 模块
@@ -61,7 +63,7 @@ class PortfolioSkill:
         holdings_list.sort(key=lambda x: x.get("market_value") or 0, reverse=True)
 
         return {
-            "snapshot_time": datetime.now().isoformat(),
+            "snapshot_time": bj_now_naive().isoformat(),
             "valuation": valuation,
             "holdings_data": {
                 "success": True,
@@ -93,7 +95,7 @@ class PortfolioSkill:
         audit_account = account or self.account
         all_navs = sorted(self.storage.get_nav_history(audit_account, days=9999), key=lambda n: n.date)
         if days and days > 0:
-            cutoff = date.today() - timedelta(days=days)
+            cutoff = bj_today() - timedelta(days=days)
             target_navs = [n for n in all_navs if n.date >= cutoff]
         else:
             target_navs = list(all_navs)
@@ -180,7 +182,7 @@ class PortfolioSkill:
         if write_report:
             audit_dir = SKILL_DIR / 'audit'
             audit_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            stamp = bj_now_naive().strftime('%Y%m%d_%H%M%S')
             out = audit_dir / f'nav_history_audit_{audit_account}_{stamp}.json'
             out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
             result['report_file'] = str(out)
@@ -192,7 +194,7 @@ class PortfolioSkill:
         all_navs = sorted(self.storage.get_nav_history(audit_account, days=9999), key=lambda n: n.date)
         nav_index = self.portfolio._build_nav_lookup(all_navs)
         if days and days > 0:
-            cutoff = date.today() - timedelta(days=days)
+            cutoff = bj_today() - timedelta(days=days)
             target_navs = [n for n in all_navs if n.date >= cutoff]
         else:
             target_navs = list(all_navs)
@@ -337,7 +339,7 @@ class PortfolioSkill:
         if write_report:
             audit_dir = SKILL_DIR / 'audit'
             audit_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            stamp = bj_now_naive().strftime('%Y%m%d_%H%M%S')
             out = audit_dir / f'nav_history_reconcile_{audit_account}_{stamp}.json'
             out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
             result['report_file'] = str(out)
@@ -397,7 +399,7 @@ class PortfolioSkill:
         if write_report:
             audit_dir = SKILL_DIR / 'audit'
             audit_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            stamp = bj_now_naive().strftime('%Y%m%d_%H%M%S')
             out = audit_dir / f'nav_history_accuracy_{audit_account}_{stamp}.json'
             out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
             result['report_file'] = str(out)
@@ -485,7 +487,7 @@ class PortfolioSkill:
         if write_report:
             audit_dir = SKILL_DIR / 'audit'
             audit_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            stamp = bj_now_naive().strftime('%Y%m%d_%H%M%S')
             suffix = 'dryrun' if dry_run else 'applied'
             out = audit_dir / f'nav_history_repair_{account or self.account}_{suffix}_{stamp}.json'
             out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -1378,7 +1380,7 @@ class PortfolioSkill:
 
             # --- 合成实时虚拟净值 ---
             # 用统一估值结果 + 最近一次记录的份额，推算当前净值与四个派生指标
-            today = date.today()
+            today = bj_today()
             live_total = valuation.total_value_cny
             live_cash = valuation.cash_value_cny
             live_stock = valuation.stock_value_cny + valuation.fund_value_cny
@@ -1488,7 +1490,7 @@ class PortfolioSkill:
 
             return {
                 "success": True,
-                "generated_at": datetime.now().isoformat(),
+                "generated_at": bj_now_naive().isoformat(),
                 "overview": {
                     "total_value": holdings_data.get("total_value", 0),
                     "cash_ratio": position_data.get("cash_ratio", 0),
@@ -1527,7 +1529,7 @@ class PortfolioSkill:
         try:
             snapshot = snapshot or self.build_snapshot()
             valuation = snapshot["valuation"]
-            today = date.today()
+            today = bj_today()
 
             if (not dry_run) and (not confirm):
                 return {
