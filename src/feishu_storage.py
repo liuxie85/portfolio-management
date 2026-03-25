@@ -976,6 +976,8 @@ class FeishuStorage:
 
     def _cash_flow_to_dict(self, cf: CashFlow) -> Dict:
         """CashFlow 转字典"""
+        # Normalize flow_type to match Feishu SingleSelect options (DEPOSIT/WITHDRAW)
+        flow_type = str(cf.flow_type).upper() if cf.flow_type is not None else None
         result = {
             'flow_date': cf.flow_date,
             'account': cf.account,
@@ -983,7 +985,7 @@ class FeishuStorage:
             'currency': cf.currency,
             'cny_amount': cf.cny_amount,
             'exchange_rate': cf.exchange_rate,
-            'flow_type': cf.flow_type,
+            'flow_type': flow_type,
             'source': cf.source,
             'remark': cf.remark,
         }
@@ -1007,7 +1009,8 @@ class FeishuStorage:
             currency=data.get('currency', 'CNY'),
             cny_amount=float(data.get('cny_amount')) if data.get('cny_amount') is not None else None,
             exchange_rate=float(data.get('exchange_rate')) if data.get('exchange_rate') is not None else None,
-            flow_type=data.get('flow_type', 'deposit'),
+            # Normalize flow_type to match Feishu SingleSelect options (DEPOSIT/WITHDRAW)
+            flow_type=str(data.get('flow_type', 'DEPOSIT')).upper(),
             source=data.get('source'),
             remark=data.get('remark'),
         )
