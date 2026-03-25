@@ -327,6 +327,11 @@ class PriceFetcher:
                     except Exception as e:
                         print(f"[警告] 批量查询失败: {e}")
 
+            # 诊断：标记那些被写入 expired_cache 的为 stale fallback（便于上层统计/提示）
+            for code, payload in list(results.items()):
+                if isinstance(payload, dict) and payload.get('is_from_cache') and code in expired_cache:
+                    payload.setdefault('is_stale', True)
+
             # 处理未获取到的代码（使用过期缓存）
             for code in other_codes + us_codes:
                 if code not in results and code in expired_cache:
