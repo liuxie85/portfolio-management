@@ -12,8 +12,9 @@ We keep it minimal (requests + stdlib) and avoid coupling to project models.
 
 from __future__ import annotations
 
-from typing import Dict, List, Iterable, Tuple
+from typing import Dict, List, Iterable, Tuple, Any
 import re
+import time
 
 
 def chunked(items: List[str], size: int) -> Iterable[List[str]]:
@@ -40,27 +41,53 @@ def parse_multi_payload(text: str) -> Dict[str, List[str]]:
     return out
 
 
-def fetch_batch(session, query_codes: List[str], timeout: int = 8, chunk_size: int = 50) -> Dict[str, List[str]]:
+def fetch_batch(
+    session,
+    query_codes: List[str],
+    timeout: int = 8,
+    chunk_size: int = 50,
+) -> Tuple[Dict[str, List[str]], Dict[str, Any]]:
     """Fetch Tencent quotes in batches.
 
-    Args:
-        session: requests.Session
-        query_codes: list like ['sh600519','hk00700','jj007722']
-        timeout: per-request timeout
-        chunk_size: number of codes per request
-
     Returns:
-        mapping query_code -> parts list
+        (mapping query_code -> parts list, meta)
+
+    meta fields:
+        - requests: number of HTTP requests performed
+        - chunk_size
+        - timeout
+        - elapsed_ms
+        - requested_codes
+        - returned_codes
     """
+    started = time.time()
     results: Dict[str, List[str]] = {}
     if not query_codes:
-        return results
+        return results, {
+            'requests': 0,
+            'chunk_size': chunk_size,
+            'timeout': timeout,
+            'elapsed_ms': 0,
+            'requested_codes': 0,
+            'returned_codes': 0,
+        }
 
+    req_count = 0
     for batch in chunked(query_codes, chunk_size):
         url = "http://qt.gtimg.cn/q=" + ",".join(batch)
         resp = session.get(url, timeout=timeout)
         resp.encoding = 'gb2312'
         parsed = parse_multi_payload(resp.text)
         results.update(parsed)
+        req_count += 1
 
-    return results
+    elapsed_ms = int((time.time() - started) * 1000)
+    meta = {
+        'requests': req_count,
+        'chunk_size': chunk_size,
+        'timeout': timeout,
+        'elapsed_ms': elapsed_ms,
+        'requested_codes': len(query_codes),
+        'returned_codes': len(results),
+    }
+    return results, meta

@@ -121,6 +121,8 @@ class PriceFetcher:
         self.use_cache = use_cache and storage is not None
         self._rate_cache = {}  # 汇率缓存
         self._rate_cache_time = None
+        # last-batch meta for observability
+        self._last_tencent_batch_meta = None
 
     def fetch(self, code: str, asset_name: str = None, force_refresh: bool = False) -> Optional[Dict]:
         """获取资产价格 (带缓存)
@@ -474,7 +476,10 @@ class PriceFetcher:
             return results, leftover
 
         from .tencent_batch import fetch_batch as _tencent_fetch_batch
-        parts_map = _tencent_fetch_batch(self.session, query_codes, timeout=8, chunk_size=50)
+        parts_map, meta = _tencent_fetch_batch(self.session, query_codes, timeout=8, chunk_size=50)
+
+        # attach meta for harness/diagnostics (counted as a best-effort hint)
+        self._last_tencent_batch_meta = meta
 
         # FX (only needed for HK)
         try:

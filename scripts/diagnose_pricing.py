@@ -58,6 +58,8 @@ def main() -> None:
         use_cache_only=False,
     )
 
+    tencent_meta = getattr(fetcher, '_last_tencent_batch_meta', None)
+
     rows = []
     source_counter = Counter()
     state_counter = Counter()
@@ -104,6 +106,7 @@ def main() -> None:
             **state_counter,
         },
         "sources": dict(source_counter),
+        "tencent_batch": tencent_meta,
         "rows": rows,
     }
 

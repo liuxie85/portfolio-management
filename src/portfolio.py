@@ -611,9 +611,18 @@ class PortfolioManager:
         warnings.extend(normalization_warnings)
         warnings.extend(price_errors)
 
+        # best-effort: attach Tencent batch meta if price_fetcher is present
+        tencent_meta = None
+        if self.price_fetcher is not None:
+            tencent_meta = getattr(self.price_fetcher, '_last_tencent_batch_meta', None)
+
+        extra = ''
+        if isinstance(tencent_meta, dict) and tencent_meta.get('requests') is not None:
+            extra = f"; tencent_batch=reqs={tencent_meta.get('requests')}, elapsed_ms={tencent_meta.get('elapsed_ms')}, returned={tencent_meta.get('returned_codes')}/{tencent_meta.get('requested_codes')}"
+
         warnings.append(
             f"[价格汇总] realtime={price_meta['from_realtime']}, cache={price_meta['from_cache']}, "
-            f"stale_fallback={price_meta['stale_fallback']}, missing={price_meta['missing']}"
+            f"stale_fallback={price_meta['stale_fallback']}, missing={price_meta['missing']}" + extra
         )
 
         return PortfolioValuation(
