@@ -28,6 +28,7 @@ from src.asset_utils import (
     detect_asset_type,
     parse_date,
 )
+from src.broker_message_parser import parse_futu_fill_message
 from src import config
 
 
@@ -39,7 +40,10 @@ DEFAULT_ACCOUNT = config.get_account()
 # ========== 核心 API 类 ==========
 
 class PortfolioSkill:
-    """投资组合管理 Skill 核心类"""
+    """投资组合管理 Skill 核心类
+
+    额外能力：支持从券商成交提醒消息（如富途成交提醒）解析并写入 transactions 表。
+    """
 
     def build_snapshot(self) -> Dict[str, Any]:
         """构建统一估值快照，供 full_report / record_nav 复用，避免时点差。"""
@@ -704,6 +708,84 @@ class PortfolioSkill:
             return {"success": False, "error": str(e)}
 
     # ---------- 持仓查询 ----------
+
+    def record_transaction_from_message(self, message: str,
+                                        market: str = "富途",
+                                        fee: float = 0,
+                                        auto_cash: bool = False,
+                                        request_id: str = None,
+                                        dry_run: bool = True,
+                                        skip_validation: bool = False) -> Dict[str, Any]:
+        """解析券商成交提醒并写入交易表（transactions）。
+
+        当前支持富途成交提醒：
+        - 成功买入20股$富途控股 (FUTU.US)$，成交价格：147 ... 2026/03/12 21:59:45 (香港)
+
+        dry_run=True 时只返回解析结构，不写入。
+        """
+        parsed = parse_futu_fill_message(message, default_market=market)
+        if not parsed.ok:
+            return {"success": False, "error": parsed.error, "parsed": parsed.__dict__}
+
+        # map to skill buy/sell
+        # derive code in our system: strip suffix like .US/.HK if needed
+        code = parsed.asset_id or ""
+        # portfolio-management asset_id for US is typically ticker like FUTU (not FUTU.US)
+        code_norm = code.replace('.US', '').replace('.HK', '') if code else None
+
+        # date
+        date_str = parsed.tx_date
+
+        # name
+        name = parsed.asset_name or code_norm or code
+
+        # Build a deterministic request_id unless user provided
+        rid = request_id or parsed.request_id
+
+        if dry_run:
+            return {
+                "success": True,
+                "dry_run": True,
+                "parsed": parsed.__dict__,
+                "action": {
+                    "tx_type": parsed.tx_type,
+                    "code": code_norm,
+                    "name": name,
+                    "quantity": parsed.quantity,
+                    "price": parsed.price,
+                    "date_str": date_str,
+                    "market": market,
+                    "fee": fee,
+                    "request_id": rid,
+                    "auto_cash": auto_cash,
+                }
+            }
+
+        if parsed.tx_type == 'BUY':
+            return self.buy(
+                code=code_norm,
+                name=name,
+                quantity=float(parsed.quantity),
+                price=float(parsed.price),
+                date_str=date_str,
+                market=market,
+                fee=fee,
+                auto_deduct_cash=auto_cash,
+                request_id=rid,
+                skip_validation=skip_validation,
+            )
+        else:
+            return self.sell(
+                code=code_norm,
+                quantity=float(parsed.quantity),
+                price=float(parsed.price),
+                date_str=date_str,
+                market=market,
+                fee=fee,
+                auto_add_cash=auto_cash,
+                request_id=rid,
+            )
+
 
     def get_holdings(self, include_cash: bool = True, group_by_market: bool = False,
                      include_price: bool = False, timeout: int = 10) -> Dict[str, Any]:
@@ -1708,6 +1790,38 @@ def buy(code: str, name: str, quantity: float, price: float, **kwargs) -> Dict:
 def sell(code: str, quantity: float, price: float, **kwargs) -> Dict:
     """卖出资产"""
     return _get_default_skill().sell(code, quantity, price, **kwargs)
+
+
+def record_transaction_from_message(message: str,
+                                    market: str = "富途",
+                                    fee: float = 0,
+                                    auto_cash: bool = False,
+                                    request_id: str = None,
+                                    dry_run: bool = True,
+                                    skip_validation: bool = False) -> Dict:
+    """从券商成交提醒消息中解析并记录交易。
+
+    当前支持（富途成交提醒，示例）：
+    - 成功买入20股$富途控股 (FUTU.US)$，成交价格：147 ... 2026/03/12 21:59:45 (香港)
+
+    Args:
+      message: 原始消息全文
+      market: 交易渠道/券商（默认 富途）
+      fee: 手续费（消息里通常没有，默认 0，可手填）
+      auto_cash: 买入时自动扣现金 / 卖出时自动加现金
+      request_id: 幂等键（不传则系统会自动生成）
+      dry_run: True 时只返回解析结果，不写入交易表
+      skip_validation: 是否跳过代码有效性校验
+    """
+    return _get_default_skill().record_transaction_from_message(
+        message=message,
+        market=market,
+        fee=fee,
+        auto_cash=auto_cash,
+        request_id=request_id,
+        dry_run=dry_run,
+        skip_validation=skip_validation,
+    )
 
 def deposit(amount: float, **kwargs) -> Dict:
     """入金"""
