@@ -16,7 +16,7 @@ import os
 import time
 import random
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 
 from .time_utils import bj_now_naive
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,7 +33,13 @@ from . import config as _config
 RATE_CACHE_FILE = Path(__file__).parent.parent / '.data' / 'rate_cache.json'
 
 class PriceFetcher:
-    """统一价格获取器 (带缓存优化，支持飞书多维表)"""
+    """统一价格获取器 (带缓存优化，支持飞书多维表)
+
+    Harness-friendly conventions:
+    - Prefer batch APIs when available (Tencent quotes) to reduce latency and failure surface.
+    - Keep per-asset payloads self-describing (source/is_from_cache/is_stale/expires_at).
+    - Provide scripts/diagnose_pricing.py for quick observability.
+    """
 
     MONEY_QUANT = Decimal('0.01')
     RATE_QUANT = Decimal('0.000001')
@@ -115,6 +121,8 @@ class PriceFetcher:
         self.use_cache = use_cache and storage is not None
         self._rate_cache = {}  # 汇率缓存
         self._rate_cache_time = None
+        # last-batch meta for observability
+        self._last_tencent_batch_meta = None
 
     def fetch(self, code: str, asset_name: str = None, force_refresh: bool = False) -> Optional[Dict]:
         """获取资产价格 (带缓存)
@@ -327,6 +335,11 @@ class PriceFetcher:
                     except Exception as e:
                         print(f"[警告] 批量查询失败: {e}")
 
+            # 诊断：标记那些被写入 expired_cache 的为 stale fallback（便于上层统计/提示）
+            for code, payload in list(results.items()):
+                if isinstance(payload, dict) and payload.get('is_from_cache') and code in expired_cache:
+                    payload.setdefault('is_stale', True)
+
             # 处理未获取到的代码（使用过期缓存）
             for code in other_codes + us_codes:
                 if code not in results and code in expired_cache:
@@ -351,6 +364,9 @@ class PriceFetcher:
                           max_workers: int = 5, _nested: bool = False) -> Dict[str, Dict]:
         """并发批量查询（用于非美股资产）
 
+        优化：腾讯行情支持 batch 接口，本函数优先将 cn/hk/fund(jj) 走批量，
+        只对剩余资产再走单个 fetch（并发）。
+
         Args:
             codes: 资产代码列表
             name_map: 代码到名称映射
@@ -360,30 +376,39 @@ class PriceFetcher:
         Returns:
             代码到价格数据的映射
         """
-        results = {}
-        errors = []
+        results: Dict[str, Dict] = {}
+        errors: List[str] = []
 
-        def fetch_single(code):
+        # 1) Tencent batch for cn/hk/fund
+        try:
+            batch_results, leftover = self._fetch_tencent_quotes_batch(codes, name_map=name_map)
+            results.update(batch_results)
+            codes = leftover
+        except Exception as e:
+            # batch 失败不应影响整体；回退到逐个 fetch
+            errors.append(f"tencent_batch_failed: {e}")
+
+        def fetch_single(code: str):
             try:
                 asset_name = name_map.get(code)
                 return code, self.fetch(code, asset_name, force_refresh=False)
             except Exception as e:
                 return code, {'error': str(e)}
 
-        # 如果已在线程池中（嵌套调用），使用顺序执行避免死锁
+        if not codes:
+            return results
+
+        # 2) remaining assets
         if _nested:
             for code in codes:
-                code, result = fetch_single(code)
+                c, result = fetch_single(code)
                 if result and 'error' not in result:
-                    results[code] = result
+                    results[c] = result
                 elif result and 'error' in result:
-                    errors.append(f"{code}: {result['error']}")
+                    errors.append(f"{c}: {result['error']}")
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_code = {
-                    executor.submit(fetch_single, code): code for code in codes
-                }
-
+                future_to_code = {executor.submit(fetch_single, code): code for code in codes}
                 for future in as_completed(future_to_code):
                     code = future_to_code[future]
                     try:
@@ -399,6 +424,147 @@ class PriceFetcher:
             print(f"部分资产查询失败: {'; '.join(errors[:3])}")
 
         return results
+
+    def _fetch_tencent_quotes_batch(self, codes: List[str], name_map: Dict[str, str] = None) -> Tuple[Dict[str, Dict], List[str]]:
+        """Fetch Tencent quotes in batch for cn/hk/fund(jj).
+
+        Returns:
+            (results_map, leftover_codes)
+        """
+        name_map = name_map or {}
+        results: Dict[str, Dict] = {}
+        leftover: List[str] = []
+
+        # Build query codes
+        cn_query: List[Tuple[str, str]] = []  # (orig, query)
+        hk_query: List[Tuple[str, str]] = []
+        fund_query: List[Tuple[str, str]] = []
+
+        for code in codes:
+            mkt = _detect_market_type_func(code)
+            c = (code or '').upper().strip()
+            if mkt == 'cn':
+                if c.startswith(('SH', 'SZ')):
+                    q = c.lower()
+                elif c.isdigit() and len(c) == 6:
+                    q = ('sh' + c) if c.startswith('6') else ('sz' + c)
+                else:
+                    leftover.append(code)
+                    continue
+                cn_query.append((code, q))
+            elif mkt == 'hk':
+                num = c[2:] if c.startswith('HK') else c
+                if not num.isdigit():
+                    leftover.append(code)
+                    continue
+                q = 'hk' + num.zfill(5)
+                hk_query.append((code, q))
+            elif mkt == 'fund':
+                # Tencent jj NAV
+                if c.startswith(('SH', 'SZ')):
+                    c = c[2:]
+                if not (c.isdigit() and len(c) == 6):
+                    leftover.append(code)
+                    continue
+                q = 'jj' + c
+                fund_query.append((code, q))
+            else:
+                leftover.append(code)
+
+        query_codes = [q for _, q in (cn_query + hk_query + fund_query)]
+        if not query_codes:
+            return results, leftover
+
+        from .tencent_batch import fetch_batch as _tencent_fetch_batch
+        parts_map, meta = _tencent_fetch_batch(self.session, query_codes, timeout=8, chunk_size=50)
+
+        # attach meta for harness/diagnostics (counted as a best-effort hint)
+        self._last_tencent_batch_meta = meta
+
+        # FX (only needed for HK)
+        try:
+            rates = self._fetch_exchange_rates()
+            hkd_cny = rates['HKDCNY']
+        except Exception:
+            hkd_cny = None
+
+        def build_by_orig(orig: str, q: str, kind: str) -> Optional[Dict]:
+            data = parts_map.get(q)
+            if not data:
+                return None
+            if kind in ('cn', 'hk'):
+                if len(data) <= 45:
+                    return None
+                price = float(data[3])
+                payload = {
+                    'code': orig,
+                    'name': data[1] or name_map.get(orig) or orig,
+                    'price': price,
+                    'prev_close': float(data[4]) if data[4] else None,
+                    'open': float(data[5]) if data[5] else None,
+                    'high': float(data[33]) if data[33] else None,
+                    'low': float(data[34]) if data[34] else None,
+                    'change': float(data[31]) if data[31] else None,
+                    'change_pct': float(data[32]) if data[32] else None,
+                    'volume': float(data[36]) * 100 if len(data) > 36 and data[36] else 0,
+                    'time': data[30] if len(data) > 30 else None,
+                    'source': 'tencent_batch',
+                }
+                if kind == 'cn':
+                    payload.update({'currency': 'CNY', 'cny_price': price, 'market_type': 'cn'})
+                else:
+                    if hkd_cny:
+                        payload.update({'currency': 'HKD', 'cny_price': price * hkd_cny, 'exchange_rate': hkd_cny, 'market_type': 'hk'})
+                    else:
+                        payload.update({'currency': 'HKD', 'market_type': 'hk'})
+                return self._normalize_price_payload(payload)
+
+            if kind == 'fund':
+                # jj payload: NAV at index 5
+                if len(data) < 6:
+                    return None
+                try:
+                    nav = float(data[5])
+                except Exception:
+                    return None
+                if not nav or nav <= 0:
+                    return None
+                return self._normalize_price_payload({
+                    'code': orig,
+                    'name': data[1] or name_map.get(orig) or orig,
+                    'price': nav,
+                    'currency': 'CNY',
+                    'cny_price': nav,
+                    'market_type': 'fund',
+                    'source': 'tencent_jj_batch',
+                })
+
+            return None
+
+        # build results
+        for orig, q in cn_query:
+            r = build_by_orig(orig, q, 'cn')
+            if r:
+                results[orig] = r
+            else:
+                leftover.append(orig)
+
+        for orig, q in hk_query:
+            r = build_by_orig(orig, q, 'hk')
+            if r:
+                results[orig] = r
+            else:
+                leftover.append(orig)
+
+        for orig, q in fund_query:
+            r = build_by_orig(orig, q, 'fund')
+            if r:
+                results[orig] = r
+            else:
+                leftover.append(orig)
+
+        return results, leftover
+
 
     def _fetch_us_batch(self, codes: List[str], name_map: Dict[str, str],
                         expired_cache: Dict[str, Dict], max_workers: int = 3,
@@ -1055,7 +1221,10 @@ class PriceFetcher:
         return None
 
     def _fetch_a_stock_from_tencent(self, code: str) -> Optional[Dict]:
-        """从腾讯获取A股价格"""
+        """从腾讯获取A股价格（单个）。
+
+        优先推荐使用 _fetch_tencent_quotes_batch（批量），此函数保留作为兼容/回退。
+        """
         if code.startswith('SH'):
             query_code = code.lower()
         elif code.startswith('SZ'):
@@ -1065,34 +1234,27 @@ class PriceFetcher:
         else:
             query_code = code
 
-        url = f"http://qt.gtimg.cn/q={query_code}"
-        response = self.session.get(url, timeout=5)
-        response.encoding = 'gb2312'
-        text = response.text
-
-        pattern = rf'v_{query_code}="([^"]+)"'
-        match = re.search(pattern, text)
-
-        if match:
-            data = match.group(1).split('~')
-            if len(data) > 45:
-                return self._normalize_price_payload({
-                    'code': code,
-                    'name': data[1],
-                    'price': float(data[3]),
-                    'prev_close': float(data[4]),
-                    'open': float(data[5]),
-                    'high': float(data[33]),
-                    'low': float(data[34]),
-                    'change': float(data[31]),
-                    'change_pct': float(data[32]),
-                    'volume': float(data[36]) * 100 if data[36] else 0,
-                    'time': data[30],
-                    'currency': 'CNY',
-                    'cny_price': float(data[3]),
-                    'market_type': 'cn',
-                    'source': 'tencent'
-                })
+        from .tencent_batch import fetch_batch as _tencent_fetch_batch
+        parts_map = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
+        data = parts_map.get(query_code)
+        if data and len(data) > 45:
+            return self._normalize_price_payload({
+                'code': code,
+                'name': data[1],
+                'price': float(data[3]),
+                'prev_close': float(data[4]),
+                'open': float(data[5]),
+                'high': float(data[33]),
+                'low': float(data[34]),
+                'change': float(data[31]),
+                'change_pct': float(data[32]),
+                'volume': float(data[36]) * 100 if data[36] else 0,
+                'time': data[30],
+                'currency': 'CNY',
+                'cny_price': float(data[3]),
+                'market_type': 'cn',
+                'source': 'tencent'
+            })
         return None
 
     def _fetch_a_stock_from_akshare(self, code: str) -> Optional[Dict]:
@@ -1165,7 +1327,10 @@ class PriceFetcher:
         return None
 
     def _fetch_hk_stock_from_tencent(self, code: str) -> Optional[Dict]:
-        """从腾讯获取港股价格"""
+        """从腾讯获取港股价格（单个）。
+
+        优先推荐使用 _fetch_tencent_quotes_batch（批量），此函数保留作为兼容/回退。
+        """
         if code.startswith('HK'):
             numeric_part = code[2:].zfill(5)
         else:
@@ -1173,39 +1338,32 @@ class PriceFetcher:
 
         query_code = f'hk{numeric_part}'
 
-        url = f"http://qt.gtimg.cn/q={query_code}"
-        response = self.session.get(url, timeout=5)
-        response.encoding = 'gb2312'
-        text = response.text
+        from .tencent_batch import fetch_batch as _tencent_fetch_batch
+        parts_map = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
+        data = parts_map.get(query_code)
+        if data and len(data) > 45:
+            price = float(data[3])
+            rates = self._fetch_exchange_rates()
+            hkd_cny = rates['HKDCNY']
 
-        pattern = rf'v_{query_code}="([^"]+)"'
-        match = re.search(pattern, text)
-
-        if match:
-            data = match.group(1).split('~')
-            if len(data) > 45:
-                price = float(data[3])
-                rates = self._fetch_exchange_rates()
-                hkd_cny = rates['HKDCNY']
-
-                return self._normalize_price_payload({
-                    'code': code,
-                    'name': data[1],
-                    'price': price,
-                    'prev_close': float(data[4]),
-                    'open': float(data[5]),
-                    'high': float(data[33]),
-                    'low': float(data[34]),
-                    'change': float(data[31]),
-                    'change_pct': float(data[32]),
-                    'volume': float(data[36]) * 100 if data[36] else 0,
-                    'time': data[30],
-                    'currency': 'HKD',
-                    'cny_price': price * hkd_cny,
-                    'exchange_rate': hkd_cny,
-                    'market_type': 'hk',
-                    'source': 'tencent'
-                })
+            return self._normalize_price_payload({
+                'code': code,
+                'name': data[1],
+                'price': price,
+                'prev_close': float(data[4]),
+                'open': float(data[5]),
+                'high': float(data[33]),
+                'low': float(data[34]),
+                'change': float(data[31]),
+                'change_pct': float(data[32]),
+                'volume': float(data[36]) * 100 if data[36] else 0,
+                'time': data[30],
+                'currency': 'HKD',
+                'cny_price': price * hkd_cny,
+                'exchange_rate': hkd_cny,
+                'market_type': 'hk',
+                'source': 'tencent'
+            })
         return None
 
     def _fetch_hk_stock_from_akshare(self, code: str) -> Optional[Dict]:
