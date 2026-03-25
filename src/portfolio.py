@@ -646,7 +646,42 @@ class PortfolioManager:
             all_navs=all_navs,
         )
 
-        # ===== 8. 构建并保存净值记录 =====
+        # ===== 8. 写入 holdings_snapshot（用于审计/可复算） =====
+        # Snapshot is written *before* nav_history so that each NAV point is reproducible.
+        # Only write when persist=True.
+        if persist:
+            try:
+                from .snapshot_models import HoldingSnapshot
+
+                as_of = today.strftime('%Y-%m-%d')  # business date in Asia/Shanghai
+                snapshots = []
+                for h in valuation.holdings:
+                    market = (h.market or '')
+                    dedup_key = f"{account}:{as_of}:{market}:{h.asset_id}"
+                    snapshots.append(
+                        HoldingSnapshot(
+                            as_of=as_of,
+                            account=account,
+                            asset_id=h.asset_id,
+                            market=market,
+                            quantity=h.quantity,
+                            currency=h.currency,
+                            price=h.current_price,
+                            cny_price=h.cny_price,
+                            market_value_cny=h.market_value_cny,
+                            dedup_key=dedup_key,
+                            asset_name=h.asset_name,
+                            avg_cost=h.avg_cost,
+                            source='record_nav',
+                        )
+                    )
+                # Use the same dry_run flag to avoid side effects during rehearsals.
+                self.storage.batch_upsert_holding_snapshots(snapshots, dry_run=dry_run)
+            except Exception as e:
+                # Snapshot is part of accuracy/auditability contract; do not silently ignore.
+                raise RuntimeError(f"Failed to write holdings_snapshot for {today} ({account}): {e}") from e
+
+        # ===== 9. 构建并保存净值记录 =====
         nav_record = self._build_nav_record(
             today=today, account=account, valuation=valuation,
             stock_value=stock_value, cash_value=cash_value, total_value=total_value,

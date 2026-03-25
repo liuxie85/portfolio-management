@@ -13,6 +13,7 @@ from .models import (
     AssetType, TransactionType, AssetClass, Industry,
     make_tx_dedup_key, make_cf_dedup_key, DATETIME_FORMAT
 )
+from .snapshot_models import HoldingSnapshot
 from .feishu_client import FeishuClient
 from .local_cache import LocalPriceCache
 
@@ -1010,6 +1011,95 @@ class FeishuStorage:
             source=data.get('source'),
             remark=data.get('remark'),
         )
+
+    # ========== holdings_snapshot 快照操作 ==========
+
+    def batch_upsert_holding_snapshots(self, snapshots: List[HoldingSnapshot], dry_run: bool = False) -> Dict[str, Any]:
+        """Write holdings_snapshot rows in a best-effort idempotent way.
+
+        Strategy (simple + safe):
+        - Use dedup_key as the stable business identifier.
+        - Query existing records by dedup_key (client-side filter; Feishu doesn't support OR well).
+        - Update existing; create missing.
+
+        Notes:
+        - This is a write-path, so schema mismatch should raise (no silent fallback).
+        """
+        if not snapshots:
+            return {"created": 0, "updated": 0, "dry_run": dry_run}
+
+        # 1) Build a map dedup_key -> snapshot
+        by_key: Dict[str, HoldingSnapshot] = {}
+        for s in snapshots:
+            by_key[s.dedup_key] = s
+
+        # 2) Fetch existing records for this as_of/account (narrow query)
+        # We intentionally do NOT try to OR-by-dedup_key in filter.
+        any_s = snapshots[0]
+        # Narrow by as_of + account to reduce payload; as_of is Text.
+        # Feishu filter uses '&&' for AND (not the literal 'AND').
+        filter_str = (
+            f'CurrentValue.[as_of] = "{self._escape_filter_value(any_s.as_of)}" && '
+            f'CurrentValue.[account] = "{self._escape_filter_value(any_s.account)}"'
+        )
+        existing_records = self.client.list_records('holdings_snapshot', filter_str=filter_str)
+
+        existing_by_key: Dict[str, str] = {}
+        for r in existing_records:
+            k = (r.get('fields') or {}).get('dedup_key')
+            if k:
+                existing_by_key[str(k)] = r['record_id']
+
+        creates = []
+        updates = []
+
+        for k, s in by_key.items():
+            fields = {
+                'as_of': s.as_of,
+                'account': s.account,
+                'asset_id': s.asset_id,
+                'market': s.market,
+                'quantity': s.quantity,
+                'currency': s.currency,
+                'price': s.price,
+                'cny_price': s.cny_price,
+                'market_value_cny': s.market_value_cny,
+                'dedup_key': s.dedup_key,
+                'asset_name': s.asset_name,
+                'avg_cost': s.avg_cost,
+                'source': s.source,
+                'remark': s.remark,
+            }
+            feishu_fields = self._to_feishu_fields(fields, 'holdings_snapshot')
+
+            record_id = existing_by_key.get(k)
+            if record_id:
+                updates.append({'record_id': record_id, 'fields': feishu_fields})
+            else:
+                creates.append({'fields': feishu_fields})
+
+        if dry_run:
+            return {
+                'dry_run': True,
+                'filter': filter_str,
+                'existing_count': len(existing_records),
+                'to_create': len(creates),
+                'to_update': len(updates),
+                'create_sample': creates[:3],
+                'update_sample': updates[:3],
+            }
+
+        created = 0
+        updated = 0
+        if creates:
+            # batch_create expects [{'fields': {...}}, ...]
+            self.client.batch_create_records('holdings_snapshot', creates)
+            created = len(creates)
+        if updates:
+            self.client.batch_update_records('holdings_snapshot', updates)
+            updated = len(updates)
+
+        return {'dry_run': False, 'created': created, 'updated': updated, 'existing_count': len(existing_records)}
 
     # ========== nav_history 净值历史操作 ==========
 
