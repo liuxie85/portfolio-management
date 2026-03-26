@@ -30,6 +30,7 @@ from src.asset_utils import (
 )
 from src.broker_message_parser import parse_futu_fill_message
 from src.write_guard import validate_and_normalize_trade_input, validate_and_normalize_nav_input
+from src.models import NAVHistory
 from src import config
 
 
@@ -1590,6 +1591,102 @@ class PortfolioSkill:
                 },
                 "top_holdings": top_holdings_list,
                 "distribution": distribution_result
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def close_nav(self, date_str: str = None,
+                  total_value: float = None,
+                  cash_value: float = None,
+                  stock_value: float = 0.0,
+                  overwrite_existing: bool = True,
+                  dry_run: bool = True,
+                  confirm: bool = False) -> Dict[str, Any]:
+        """显式记录“清仓/关闭”状态的净值点（shares=0）。
+
+        为什么要单独做一个入口：
+        - shares=0 是合法业务语义，但必须显式触发，不能靠缺失字段/默认 0 混入。
+        - 该入口不会去拉价格/估值；你提供 total_value（以及可选 cash/stock 拆分），我们按 CLOSED 规则写入。
+
+        约定：
+        - shares 固定写 0
+        - nav 固定写 1.0
+        - details 写入 {"status":"CLOSED"}
+        - 允许 total_value > 0（残余现金等），但建议同时提供 cash_value/stock_value 以保持拆分自洽。
+
+        安全约束：默认 dry_run=True；真正写入必须 confirm=True 且 dry_run=False。
+        """
+        try:
+            nav_date = parse_date(date_str)
+
+            if (not dry_run) and (not confirm):
+                return {
+                    "success": False,
+                    "error": "Refuse to write nav_history without confirm=True (safety guard).",
+                    "date": nav_date.isoformat(),
+                    "dry_run": dry_run,
+                    "confirm": confirm,
+                }
+
+            # normalize CLOSED semantics
+            v = validate_and_normalize_nav_input(nav=None, shares=0, status='CLOSED')
+            if not v['ok']:
+                return {"success": False, "error": "invalid CLOSED nav input", "details": v}
+
+            # determine totals
+            if total_value is None:
+                if cash_value is not None and stock_value is not None:
+                    total_value = float(cash_value) + float(stock_value)
+                else:
+                    return {
+                        "success": False,
+                        "error": "total_value is required (or provide both cash_value and stock_value)",
+                    }
+
+            if cash_value is None and stock_value is not None:
+                cash_value = float(total_value) - float(stock_value)
+            if stock_value is None and cash_value is not None:
+                stock_value = float(total_value) - float(cash_value)
+
+            # If still missing, fall back to a safe split: all cash.
+            if cash_value is None and stock_value is None:
+                cash_value = float(total_value)
+                stock_value = 0.0
+
+            nav_record = NAVHistory(
+                date=nav_date,
+                account=self.account,
+                total_value=round(float(total_value), 2),
+                cash_value=round(float(cash_value), 2) if cash_value is not None else None,
+                stock_value=round(float(stock_value), 2) if stock_value is not None else None,
+                shares=0.0,
+                nav=1.0,
+                details={"status": "CLOSED"},
+            )
+
+            storage_preview = self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=True)
+            if dry_run:
+                return {
+                    "success": True,
+                    "dry_run": True,
+                    "date": nav_date.isoformat(),
+                    "nav": nav_record.nav,
+                    "shares": nav_record.shares,
+                    "total_value": nav_record.total_value,
+                    "fields": storage_preview.get("fields"),
+                    "existing": storage_preview.get("existing"),
+                }
+
+            # real write
+            self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=False)
+            return {
+                "success": True,
+                "dry_run": False,
+                "date": nav_date.isoformat(),
+                "nav": nav_record.nav,
+                "shares": nav_record.shares,
+                "total_value": nav_record.total_value,
+                "message": f"已记录 {nav_date} 清仓净值点（CLOSED）：shares=0, nav=1.0",
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

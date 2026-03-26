@@ -863,6 +863,7 @@ class PortfolioManager:
             shares_dec = total_value_dec
 
         # Quantize nav to NAV_QUANT early, so derived fields (mtd/ytd) are consistent with stored nav.
+        # shares_dec can legitimately be 0 in "清仓/关闭" scenario. In that case we define nav=1.0.
         nav_dec = (total_value_dec / shares_dec) if shares_dec > 0 else Decimal('1.0')
         nav_dec = self._quantize_nav(nav_dec)
 

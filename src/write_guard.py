@@ -87,30 +87,49 @@ def validate_and_normalize_trade_input(
     }
 
 
-def validate_and_normalize_nav_input(*, nav, shares) -> Dict[str, Any]:
+def validate_and_normalize_nav_input(*, nav, shares, status: str | None = None) -> Dict[str, Any]:
     """Validate NAV record input.
 
-    Rules:
-    - nav must be provided and > 0
-    - shares must be provided and > 0
+    We must distinguish "missing" from "explicit zero".
 
-    (We keep rules strict to avoid silent 0 writes. If you need shares==0 for a closed account,
-    make it explicit by adding a dedicated API / flag.)
+    Modes:
+    - status is None or 'OPEN': normal mode
+        - nav must be provided and > 0
+        - shares must be provided and > 0
+    - status == 'CLOSED': explicit close/clear mode
+        - shares must be provided and == 0
+        - nav may be None; we normalize it to 1.0 by default (stable downstream semantics)
+
+    NOTE:
+    - shares=None is never allowed (missing ≠ 0).
+    - If you want a different closed-nav convention, change normalization here.
     """
     errors: List[ValidationError] = []
 
+    st = (status or 'OPEN').upper()
     n = _d(nav)
     s = _d(shares)
 
-    if n is None:
-        errors.append(ValidationError('nav', 'required'))
-    elif n <= 0:
-        errors.append(ValidationError('nav', 'must be > 0'))
-
     if s is None:
         errors.append(ValidationError('shares', 'required'))
-    elif s <= 0:
-        errors.append(ValidationError('shares', 'must be > 0'))
+
+    if st == 'CLOSED':
+        # explicit close semantics
+        if s is not None and s != 0:
+            errors.append(ValidationError('shares', 'must be 0 when status=CLOSED'))
+        if n is None:
+            n = Decimal('1.0')
+        elif n <= 0:
+            errors.append(ValidationError('nav', 'must be > 0'))
+    else:
+        # OPEN
+        if n is None:
+            errors.append(ValidationError('nav', 'required'))
+        elif n <= 0:
+            errors.append(ValidationError('nav', 'must be > 0'))
+
+        if s is not None and s <= 0:
+            errors.append(ValidationError('shares', 'must be > 0'))
 
     if errors:
         return {
@@ -123,7 +142,8 @@ def validate_and_normalize_nav_input(*, nav, shares) -> Dict[str, Any]:
         'ok': True,
         'errors': [],
         'normalized': {
-            'nav': float(n),
-            'shares': float(s),
+            'status': st,
+            'nav': float(n) if n is not None else None,
+            'shares': float(s) if s is not None else None,
         }
     }
