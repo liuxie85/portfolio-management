@@ -8,6 +8,15 @@ Usage:
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+# Ensure repo root is on sys.path so `import src.*` works when running `python tests/run_tests.py`.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 def test_currency_from_us_ticker_suffix():
     from src.broker_message_parser import parse_futu_fill_message
