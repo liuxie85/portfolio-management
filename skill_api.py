@@ -1991,6 +1991,30 @@ def record_nav(price_timeout: int = 30, dry_run: bool = True, confirm: bool = Fa
         overwrite_existing=overwrite_existing,
     )
 
+
+def close_nav(date_str: str = None,
+              total_value: float = None,
+              cash_value: float = None,
+              stock_value: float = 0.0,
+              overwrite_existing: bool = True,
+              dry_run: bool = True,
+              confirm: bool = False) -> Dict:
+    """显式记录“清仓/关闭”净值点（shares=0, nav=1.0）。
+
+    允许 total_value > 0（残余现金等）。
+
+    ⚠️ 默认 dry_run=True；真正写入必须 dry_run=False 且 confirm=True。
+    """
+    return _get_default_skill().close_nav(
+        date_str=date_str,
+        total_value=total_value,
+        cash_value=cash_value,
+        stock_value=stock_value,
+        overwrite_existing=overwrite_existing,
+        dry_run=dry_run,
+        confirm=confirm,
+    )
+
 # 价格
 def get_price(code: str) -> Dict:
     """查询价格"""
