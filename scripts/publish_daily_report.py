@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -40,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-html", action="store_true", help="Do not render HTML; only record NAV + generate JSON bundle.")
     parser.add_argument("--no-publish", action="store_true", help="Do not write HTML files into reports/publish dirs.")
     parser.add_argument("--quiet", action="store_true", help="No stdout on success (scheduled mode).")
+    parser.add_argument("--debug-internal", action="store_true", help="Do not suppress internal stdout prints (debug only).")
     return parser.parse_args()
 
 
@@ -51,6 +53,13 @@ def resolve_publish_base_url(explicit: Optional[str]) -> Optional[str]:
     return None
 
 
+
+
+def _suppress_internal_stdout(enabled: bool):
+    """Context manager to suppress noisy internal stdout prints."""
+    if not enabled:
+        return contextlib.nullcontext()
+    return contextlib.redirect_stdout(open(os.devnull, 'w'))
 def build_config(args: argparse.Namespace) -> PublishConfig:
     return PublishConfig(
         repo_root=REPO_ROOT,
@@ -284,34 +293,35 @@ def publish_report(report_date: str, html: str, config: PublishConfig) -> dict[s
 def main() -> None:
     args = parse_args()
     config = build_config(args)
-    report_bundle = build_report_data(price_timeout=args.price_timeout, dry_run=args.dry_run)
-
-    # Fast mode: only compute bundle (record_nav + generate_report + get_nav)
-    if bool(args.no_html):
+    with _suppress_internal_stdout(enabled=(not bool(args.debug_internal))):
+        report_bundle = build_report_data(price_timeout=args.price_timeout, dry_run=args.dry_run)
+    
+        # Fast mode: only compute bundle (record_nav + generate_report + get_nav)
+        if bool(args.no_html):
+            if not bool(args.quiet):
+                print(json.dumps({
+                    "success": True,
+                    "nav_result": report_bundle.get("nav_result"),
+                    "report": report_bundle.get("report"),
+                    "nav_snapshot": report_bundle.get("nav_snapshot"),
+                }, ensure_ascii=False, indent=2))
+            return
+    
+        report_date, html = render_daily_report_html(report_bundle, config)
+    
+        publish_result = None
+        if not bool(args.no_publish):
+            publish_result = publish_report(report_date, html, config)
+    
+        result = {
+            "success": True,
+            "date": report_date,
+            "nav_result": report_bundle["nav_result"],
+            "publish": publish_result,
+        }
         if not bool(args.quiet):
-            print(json.dumps({
-                "success": True,
-                "nav_result": report_bundle.get("nav_result"),
-                "report": report_bundle.get("report"),
-                "nav_snapshot": report_bundle.get("nav_snapshot"),
-            }, ensure_ascii=False, indent=2))
-        return
-
-    report_date, html = render_daily_report_html(report_bundle, config)
-
-    publish_result = None
-    if not bool(args.no_publish):
-        publish_result = publish_report(report_date, html, config)
-
-    result = {
-        "success": True,
-        "date": report_date,
-        "nav_result": report_bundle["nav_result"],
-        "publish": publish_result,
-    }
-    if not bool(args.quiet):
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-
-
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    
+    
 if __name__ == "__main__":
     main()
