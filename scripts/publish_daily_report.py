@@ -125,7 +125,8 @@ def build_report_data(price_timeout: int, dry_run: bool = False) -> dict[str, An
     if not report.get("success"):
         raise RuntimeError(json.dumps(report, ensure_ascii=False))
 
-    nav_snapshot = get_nav()
+    # For daily report, we only need recent 2 days of NAV history.
+    nav_snapshot = get_nav(days=2)
     if not nav_snapshot.get("success"):
         raise RuntimeError(json.dumps(nav_snapshot, ensure_ascii=False))
 

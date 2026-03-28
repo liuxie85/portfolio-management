@@ -1058,11 +1058,15 @@ class PortfolioSkill:
 
     # ---------- 净值和收益 ----------
 
-    def get_nav(self) -> Dict[str, Any]:
-        """获取账户净值"""
+    def get_nav(self, days: int = 30) -> Dict[str, Any]:
+        """获取账户净值
+
+        Args:
+            days: 最近 N 天（默认 30）。
+        """
         try:
-            # 一次 API 调用获取最近 30 天，从中取 latest
-            navs = self.storage.get_nav_history(self.account, days=30)
+            # 一次 API 调用获取最近 N 天，从中取 latest
+            navs = self.storage.get_nav_history(self.account, days=days)
             if not navs:
                 return {"success": False, "message": "无净值记录"}
 
@@ -1101,7 +1105,7 @@ class PortfolioSkill:
 
             # 构建 history，包含关键指标
             history = []
-            for n in navs[:30]:
+            for n in navs:
                 item = {
                     "date": n.date.isoformat(),
                     "nav": n.nav,
@@ -1943,9 +1947,13 @@ def get_distribution() -> Dict:
     return _get_default_skill().get_distribution()
 
 # 净值收益
-def get_nav() -> Dict:
-    """账户净值"""
-    return _get_default_skill().get_nav()
+def get_nav(days: int = 30) -> Dict:
+    """账户净值
+
+    Args:
+        days: 获取最近 N 天历史（默认 30）。对日报发布通常只需要 2 天即可。
+    """
+    return _get_default_skill().get_nav(days=days)
 
 def get_return(period_type: str, period: str = None) -> Dict:
     """查询收益率"""
