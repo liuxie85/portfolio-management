@@ -49,3 +49,8 @@ Keep docs short, executable, and reality-checked.
 
 - Publish daily report:
   - `python scripts/publish_daily_report.py`
+
+## Natural language adapter (stub)
+
+- `scripts/nl.py "..."` converts natural language into a structured intent JSON.
+- It has **no side effects**; execution must be done by calling `scripts/pm.py` or `skill_api` explicitly.

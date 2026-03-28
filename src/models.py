@@ -51,7 +51,13 @@ class AssetType(str, Enum):
     A_STOCK = "a_stock"
     HK_STOCK = "hk_stock"
     US_STOCK = "us_stock"
+
+    # fund
     FUND = "fund"
+    CN_FUND = "cn_fund"
+    US_FUND = "us_fund"
+    HK_FUND = "hk_fund"
+
     CASH = "cash"
     MMF = "mmf"
     CRYPTO = "crypto"

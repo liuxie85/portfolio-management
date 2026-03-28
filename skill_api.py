@@ -49,7 +49,8 @@ class PortfolioSkill:
 
     def build_snapshot(self) -> Dict[str, Any]:
         """构建统一估值快照，供 full_report / record_nav 复用，避免时点差。"""
-        valuation = self.portfolio.calculate_valuation(self.account)
+        # For reporting/NAV snapshot, prefer cache if available to reduce latency.
+        valuation = self.portfolio.calculate_valuation(self.account, prefer_cache_if_available=True)
         holdings = valuation.holdings or []
         holdings_list = []
         for h in holdings:
@@ -1058,11 +1059,15 @@ class PortfolioSkill:
 
     # ---------- 净值和收益 ----------
 
-    def get_nav(self) -> Dict[str, Any]:
-        """获取账户净值"""
+    def get_nav(self, days: int = 30) -> Dict[str, Any]:
+        """获取账户净值
+
+        Args:
+            days: 最近 N 天（默认 30）。
+        """
         try:
-            # 一次 API 调用获取最近 30 天，从中取 latest
-            navs = self.storage.get_nav_history(self.account, days=30)
+            # 一次 API 调用获取最近 N 天，从中取 latest
+            navs = self.storage.get_nav_history(self.account, days=days)
             if not navs:
                 return {"success": False, "message": "无净值记录"}
 
@@ -1101,7 +1106,7 @@ class PortfolioSkill:
 
             # 构建 history，包含关键指标
             history = []
-            for n in navs[:30]:
+            for n in navs:
                 item = {
                     "date": n.date.isoformat(),
                     "nav": n.nav,
@@ -1340,6 +1345,7 @@ class PortfolioSkill:
     def generate_report(self, report_type: str = "daily",
                         record_nav: bool = False, price_timeout: int = 30,
                         snapshot: Optional[Dict[str, Any]] = None,
+                        navs: Optional[list] = None,
                         overwrite_existing: bool = True,
                         dry_run: bool = False) -> Dict[str, Any]:
         """生成日报/月报/年报
@@ -1350,7 +1356,7 @@ class PortfolioSkill:
             price_timeout: 价格获取超时时间（秒）
         """
         snapshot = snapshot or self.build_snapshot()
-        full = self.full_report(price_timeout=price_timeout, snapshot=snapshot)
+        full = self.full_report(price_timeout=price_timeout, snapshot=snapshot, navs=navs)
         if not full.get("success"):
             return full
 
@@ -1444,7 +1450,7 @@ class PortfolioSkill:
         else:
             return {"success": False, "error": f"不支持的报告类型: {report_type}，可选: daily/monthly/yearly"}
 
-    def full_report(self, price_timeout: int = 30, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def full_report(self, price_timeout: int = 30, snapshot: Optional[Dict[str, Any]] = None, navs: Optional[list] = None) -> Dict[str, Any]:
         """生成完整报告（只读，不记录净值）
 
         利用实时持仓价格合成"今日"虚拟净值，确保收益统计始终可用，
@@ -1460,7 +1466,7 @@ class PortfolioSkill:
             position_data = snapshot["position_data"]
 
             # 一次性获取全部净值历史（1 次 API 调用）
-            all_navs = self.storage.get_nav_history(self.account, days=9999)
+            all_navs = navs if navs is not None else self.storage.get_nav_history(self.account, days=9999)
 
             # --- 合成实时虚拟净值 ---
             # 用统一估值结果 + 最近一次记录的份额，推算当前净值与四个派生指标
@@ -1943,9 +1949,13 @@ def get_distribution() -> Dict:
     return _get_default_skill().get_distribution()
 
 # 净值收益
-def get_nav() -> Dict:
-    """账户净值"""
-    return _get_default_skill().get_nav()
+def get_nav(days: int = 30) -> Dict:
+    """账户净值
+
+    Args:
+        days: 获取最近 N 天历史（默认 30）。对日报发布通常只需要 2 天即可。
+    """
+    return _get_default_skill().get_nav(days=days)
 
 def get_return(period_type: str, period: str = None) -> Dict:
     """查询收益率"""
@@ -1965,9 +1975,9 @@ def sub_cash(amount: float, **kwargs) -> Dict:
     return _get_default_skill().sub_cash(amount, **kwargs)
 
 # 报告
-def generate_report(report_type: str = "daily", record_nav: bool = False, price_timeout: int = 30) -> Dict:
+def generate_report(report_type: str = "daily", record_nav: bool = False, price_timeout: int = 30, navs=None) -> Dict:
     """生成日报/月报/年报"""
-    return _get_default_skill().generate_report(report_type=report_type, record_nav=record_nav, price_timeout=price_timeout)
+    return _get_default_skill().generate_report(report_type=report_type, record_nav=record_nav, price_timeout=price_timeout, navs=navs)
 
 def full_report(price_timeout: int = 30) -> Dict:
     """完整报告（只读，不记录净值）

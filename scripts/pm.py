@@ -22,6 +22,8 @@ Safety:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import json
 import os
 import sys
@@ -33,6 +35,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+
+
+def suppress_internal(enabled: bool):
+    if not enabled:
+        return contextlib.nullcontext()
+    return contextlib.redirect_stdout(open(os.devnull, 'w'))
 def _dump(obj, as_json: bool):
     if as_json:
         print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
@@ -75,6 +83,7 @@ def cmd_report(args):
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="pm", description="portfolio-management CLI")
     p.add_argument("--json", action="store_true", help="output JSON")
+    p.add_argument("--debug-internal", action="store_true", help="Do not suppress internal stdout prints (debug only).")
 
     sp = p.add_subparsers(dest="cmd", required=True)
 

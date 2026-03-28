@@ -1349,9 +1349,14 @@ class FeishuStorage:
 
     # ========== price_cache 价格缓存操作 ==========
 
-    def get_price(self, asset_id: str) -> Optional[PriceCache]:
-        """获取缓存价格（检查有效期）- 使用本地文件"""
-        return self._local_price_cache.get(asset_id)
+    def get_price(self, asset_id: str, *, allow_expired: bool = False, max_stale_after_expiry_sec: int = 0) -> Optional[PriceCache]:
+        """获取缓存价格 - 使用本地文件
+
+        Args:
+            allow_expired: True 时允许返回过期缓存（用于非交易时段稳定优先）
+            max_stale_after_expiry_sec: 允许过期后最多多少秒仍可返回
+        """
+        return self._local_price_cache.get(asset_id, allow_expired=allow_expired, max_stale_after_expiry_sec=max_stale_after_expiry_sec)
 
     def save_price(self, price: PriceCache):
         """保存价格缓存 - 使用本地文件（零 API 调用）"""

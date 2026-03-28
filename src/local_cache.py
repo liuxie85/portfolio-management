@@ -108,20 +108,40 @@ class LocalPriceCache:
         """析构时确保数据写入"""
         self.close()
 
-    def get(self, asset_id: str) -> Optional[PriceCache]:
-        """获取价格缓存（检查有效期）- 线程安全"""
+    def get(self, asset_id: str, *, allow_expired: bool = False, max_stale_after_expiry_sec: int = 0) -> Optional[PriceCache]:
+        """获取价格缓存 - 线程安全
+
+        默认行为：过期即删除并返回 None。
+
+        Args:
+            allow_expired: True 时允许返回过期缓存（用于非交易时段“稳定优先”的估值/报表）
+            max_stale_after_expiry_sec: 允许过期后最多多少秒仍可返回（0=不允许）
+        """
         with self._lock:
             data = self._cache.get(asset_id)
             if not data:
                 return None
 
-            # 检查过期时间
             expires_at = data.get('expires_at', '')
-            now = bj_now_naive().strftime(DATETIME_FORMAT)
+            now_dt = bj_now_naive()
+            now = now_dt.strftime(DATETIME_FORMAT)
 
             if expires_at and expires_at < now:
-                self._delete_unlocked(asset_id, _flush=True)
-                return None
+                if not allow_expired:
+                    self._delete_unlocked(asset_id, _flush=True)
+                    return None
+                # allow_expired: only allow within window
+                try:
+                    exp_dt = datetime.strptime(expires_at, DATETIME_FORMAT)
+                    age = (now_dt - exp_dt).total_seconds()
+                    if age < 0:
+                        age = 0
+                    if max_stale_after_expiry_sec <= 0:
+                        return None
+                    if age > max_stale_after_expiry_sec:
+                        return None
+                except Exception:
+                    return None
 
             return PriceCache(
                 asset_id=data.get('asset_id', ''),

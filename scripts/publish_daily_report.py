@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -15,7 +16,7 @@ WORKSPACE = REPO_ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from skill_api import record_nav, generate_report, get_nav
+# NOTE: use skill instance to reuse a single snapshot (avoid repeated price fetch).
 
 
 @dataclass
@@ -37,6 +38,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--publish-base-url", default=os.environ.get("OPENCLAW_PUBLISH_BASE_URL"), help="Base publish URL (set via env OPENCLAW_PUBLISH_BASE_URL).")
     parser.add_argument("--price-timeout", type=int, default=30, help="Price fetch timeout in seconds.")
     parser.add_argument("--dry-run", action="store_true", help="Do not persist NAV writes.")
+    parser.add_argument("--no-html", action="store_true", help="Do not render HTML; only record NAV + generate JSON bundle.")
+    parser.add_argument("--no-publish", action="store_true", help="Do not write HTML files into reports/publish dirs.")
+    parser.add_argument("--quiet", action="store_true", help="No stdout on success (scheduled mode).")
+    parser.add_argument("--debug-internal", action="store_true", help="Do not suppress internal stdout prints (debug only).")
     return parser.parse_args()
 
 
@@ -46,6 +51,15 @@ def resolve_publish_base_url(explicit: Optional[str]) -> Optional[str]:
     if explicit:
         return explicit.rstrip("/")
     return None
+
+
+
+
+def _suppress_internal_stdout(enabled: bool):
+    """Context manager to suppress noisy internal stdout prints."""
+    if not enabled:
+        return contextlib.nullcontext()
+    return contextlib.redirect_stdout(open(os.devnull, 'w'))
 
 
 def build_config(args: argparse.Namespace) -> PublishConfig:
@@ -99,17 +113,69 @@ def type_label(v: str) -> str:
 
 
 def build_report_data(price_timeout: int, dry_run: bool = False) -> dict[str, Any]:
+    """Build a consistent bundle for publishing.
+
+    Performance notes:
+    - Avoid fetching holdings/prices more than once.
+    - Use one snapshot for both record_nav and report generation.
+    """
+    # Build a single snapshot first (heavy operation: holdings + price fetch).
+    # Import lazily to keep script startup fast.
+    from skill_api import _get_default_skill
+
+    import time
+    def _ms():
+        return int(time.time()*1000)
+
+    skill = _get_default_skill()
+
+    t_snapshot = _ms()
+    snapshot = skill.build_snapshot()
+
+    # Debug: show price meta if present
+    try:
+        valuation = snapshot.get('valuation')
+        pm = getattr(valuation, 'price_meta', None)
+        if pm is not None:
+            print('[price_meta]', pm)
+    except Exception:
+        pass
+    snapshot_ms = _ms() - t_snapshot
+
+    t_navs = _ms()
+    navs_all = skill.storage.get_nav_history(skill.account, days=9999)
+    navs_ms = _ms() - t_navs
+
+
+    # Fetch full NAV history once and reuse it across record_nav/report.
+    # This avoids duplicate Feishu reads in a single publish run.
+    navs_all = skill.storage.get_nav_history(skill.account, days=9999)
+
+    t_record_nav = _ms()
+    # NOTE: skill_api.record_nav() 默认 dry_run=True（安全约束）。
+    # 作为定时任务，我们在非 dry_run 模式下显式写入：dry_run=False 且 confirm=True。
     if dry_run:
-        raise RuntimeError("当前 skill_api.record_nav 便捷入口不支持 dry_run 参数，请改用 PortfolioSkill.record_nav(...) 或移除 --dry-run")
-    nav_result = record_nav(price_timeout=price_timeout)
+        nav_result = skill.record_nav(price_timeout=price_timeout, dry_run=True, confirm=False, snapshot=snapshot)
+    else:
+        nav_result = skill.record_nav(price_timeout=price_timeout, dry_run=False, confirm=True, snapshot=snapshot)
+
+    record_nav_ms = _ms() - t_record_nav
+
     if not nav_result.get("success"):
         raise RuntimeError(json.dumps(nav_result, ensure_ascii=False))
 
-    report = generate_report(report_type="daily", record_nav=False, price_timeout=price_timeout)
+    t_report = _ms()
+    # Generate report using the same snapshot (no extra price fetch).
+    report = skill.generate_report(report_type="daily", record_nav=False, price_timeout=price_timeout, snapshot=snapshot, navs=navs_all)
+    report_ms = _ms() - t_report
+
     if not report.get("success"):
         raise RuntimeError(json.dumps(report, ensure_ascii=False))
 
-    nav_snapshot = get_nav()
+    t_get_nav = _ms()
+    # For daily report, we only need recent 2 days of NAV history.
+    nav_snapshot = skill.get_nav(days=2)
+    get_nav_ms = _ms() - t_get_nav
     if not nav_snapshot.get("success"):
         raise RuntimeError(json.dumps(nav_snapshot, ensure_ascii=False))
 
@@ -117,6 +183,13 @@ def build_report_data(price_timeout: int, dry_run: bool = False) -> dict[str, An
         "nav_result": nav_result,
         "report": report,
         "nav_snapshot": nav_snapshot,
+        "stage_timings": {
+            "snapshot_ms": snapshot_ms,
+            "navs_all_ms": navs_ms,
+            "record_nav_ms": record_nav_ms,
+            "generate_report_ms": report_ms,
+            "get_nav_ms": get_nav_ms,
+        },
     }
 
 
@@ -148,7 +221,9 @@ def render_daily_report_html(report_bundle: dict[str, Any], config: PublishConfi
     equity_value = (float(stock_value) if stock_value is not None else 0.0) + fund_value
     equity_ratio = stock_ratio + fund_ratio
     dt = report.get("date") or date.today().isoformat()
-    prev_nav = history[-2].get("nav") if len(history) >= 2 else None
+    # nav_snapshot.history does NOT include today's synthetic NAV (it only contains persisted NAV records).
+    # Therefore, the correct '较昨日' baseline is the latest persisted NAV (usually yesterday), i.e. history[-1].
+    prev_nav = history[-1].get("nav") if len(history) >= 1 else None
     daily_change = (nav - float(prev_nav)) if prev_nav not in (None, 0) else None
     daily_return = ((nav / float(prev_nav)) - 1) if prev_nav not in (None, 0) else None
     # Estimated daily PnL in CNY when cash_flow is 0: delta_NAV * shares
@@ -272,19 +347,65 @@ def publish_report(report_date: str, html: str, config: PublishConfig) -> dict[s
     }
 
 
+def _now_ms() -> int:
+    import time
+    return int(time.time() * 1000)
+
+
 def main() -> None:
     args = parse_args()
     config = build_config(args)
-    report_bundle = build_report_data(price_timeout=args.price_timeout, dry_run=args.dry_run)
-    report_date, html = render_daily_report_html(report_bundle, config)
-    publish_result = publish_report(report_date, html, config)
-    result = {
-        "success": True,
-        **publish_result,
-        "nav_result": report_bundle["nav_result"],
-    }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
 
+    # Speed: scheduled daily report can skip expensive NAV runtime validation.
+    # Enable only for this script via env var to avoid impacting other entry points.
+    if os.environ.get("PM_DISABLE_NAV_RUNTIME_VALIDATION") in ("1", "true", "TRUE", "yes", "YES"):
+        os.environ["PORTFOLIO_NAV_DISABLE_RUNTIME_VALIDATION"] = "1"
 
+    timings: dict[str, int] = {}
+    t0 = _now_ms()
+
+    with _suppress_internal_stdout(enabled=(not bool(args.debug_internal))):
+        t1 = _now_ms()
+        report_bundle = build_report_data(price_timeout=args.price_timeout, dry_run=args.dry_run)
+        timings['build_report_data_ms'] = _now_ms() - t1
+
+        # Fast mode: only compute bundle (record_nav + generate_report + get_nav)
+        if bool(args.no_html):
+            timings['total_ms'] = _now_ms() - t0
+            out = {
+                "success": True,
+                "nav_result": report_bundle.get("nav_result"),
+                "report": report_bundle.get("report"),
+                "nav_snapshot": report_bundle.get("nav_snapshot"),
+                "stage_timings": report_bundle.get("stage_timings"),
+                "timings": timings,
+            }
+            if not bool(args.quiet):
+                print(json.dumps(out, ensure_ascii=False, indent=2))
+            return
+
+        t2 = _now_ms()
+        report_date, html = render_daily_report_html(report_bundle, config)
+        timings['render_html_ms'] = _now_ms() - t2
+
+        publish_result = None
+        if not bool(args.no_publish):
+            t3 = _now_ms()
+            publish_result = publish_report(report_date, html, config)
+            timings['publish_ms'] = _now_ms() - t3
+
+        timings['total_ms'] = _now_ms() - t0
+
+        result = {
+            "success": True,
+            "date": report_date,
+            "nav_result": report_bundle["nav_result"],
+            "publish": publish_result,
+            "timings": timings,
+        }
+        if not bool(args.quiet):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    
+    
 if __name__ == "__main__":
     main()

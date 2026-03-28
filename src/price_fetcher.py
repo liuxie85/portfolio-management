@@ -16,7 +16,7 @@ import os
 import time
 import random
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 
 from .time_utils import bj_now_naive
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -125,6 +125,9 @@ class PriceFetcher:
         self._last_tencent_batch_meta = None
 
     def fetch(self, code: str, asset_name: str = None, force_refresh: bool = False) -> Optional[Dict]:
+        # NOTE: keep local vars so code shared with fetch_batch edits doesn't break.
+        asset_type_map = None
+        market_closed_ttl_multiplier = 1.0
         """获取资产价格 (带缓存)
 
         Args:
@@ -182,12 +185,25 @@ class PriceFetcher:
             from datetime import datetime, timedelta
 
             market_type = _detect_market_type_func(code)
-            ttl = MarketTimeUtil.get_cache_ttl(market_type)
+            # Prefer holdings-provided asset_type when available to avoid market mis-detection.
+            if asset_type_map is not None and code in asset_type_map:
+                from .models import AssetType
+                at = asset_type_map.get(code)
+                atv = at.value if hasattr(at, 'value') else str(at)
+                if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
+                    market_type = 'cn'
+                elif atv in (AssetType.HK_STOCK.value, AssetType.HK_FUND.value):
+                    market_type = 'hk'
+                elif atv in (AssetType.US_STOCK.value, AssetType.US_FUND.value):
+                    market_type = 'us'
+                elif atv in (AssetType.FUND.value,):
+                    market_type = 'fund'
+            ttl = int(MarketTimeUtil.get_cache_ttl(market_type) * market_closed_ttl_multiplier)
 
             # 计算过期时间（北京时间 naive）
             expires_at = bj_now_naive() + timedelta(seconds=ttl)
 
-            # 检测资产类型
+            # 检测资产类型（用于 price_cache 记录；不影响 holdings 的 asset_type）
             asset_type = AssetType.OTHER
             if market_type == 'cn':
                 asset_type = AssetType.A_STOCK
@@ -217,6 +233,8 @@ class PriceFetcher:
         return result
 
     def fetch_batch(self, codes: List[str], name_map: Dict[str, str] = None,
+                    asset_type_map: Dict[str, Any] = None,
+                    market_closed_ttl_multiplier: float = 1.0,
                     force_refresh: bool = False, use_concurrent: bool = True,
                     skip_us: bool = False, use_cache_only: bool = False) -> Dict[str, Dict]:
         """批量获取价格 (智能缓存 + 并发查询)
@@ -301,6 +319,19 @@ class PriceFetcher:
         other_codes = []
         for code in to_fetch:
             market_type = _detect_market_type_func(code)
+            # Prefer holdings-provided asset_type when available to avoid market mis-detection.
+            if asset_type_map is not None and code in asset_type_map:
+                from .models import AssetType
+                at = asset_type_map.get(code)
+                atv = at.value if hasattr(at, 'value') else str(at)
+                if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
+                    market_type = 'cn'
+                elif atv in (AssetType.HK_STOCK.value, AssetType.HK_FUND.value):
+                    market_type = 'hk'
+                elif atv in (AssetType.US_STOCK.value, AssetType.US_FUND.value):
+                    market_type = 'us'
+                elif atv in (AssetType.FUND.value,):
+                    market_type = 'fund'
             if market_type == 'us' and not skip_us:
                 us_codes.append(code)
             elif market_type != 'us':
@@ -447,7 +478,12 @@ class PriceFetcher:
                 if c.startswith(('SH', 'SZ')):
                     q = c.lower()
                 elif c.isdigit() and len(c) == 6:
-                    q = ('sh' + c) if c.startswith('6') else ('sz' + c)
+                    # A股/ETF 代码前缀规则（经验）：
+                    # - 6xxxxx / 688xxx：上交所
+                    # - 5xxxxx：上交所基金/ETF 常见前缀（如 510/512/513/515/516/588...）
+                    # - 0/1/3/2 开头多为深交所（其中 159xxx 为深交所 ETF 常见）
+                    # 不能再用“非6一律SZ”，否则 5xxxxx 的 ETF 会被错查成 sz563020=新疆2437 这种离谱结果。
+                    q = ('sh' + c) if c.startswith(('6', '5')) else ('sz' + c)
                 else:
                     leftover.append(code)
                     continue

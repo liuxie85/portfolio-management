@@ -56,6 +56,7 @@ def get(key: str, default=None):
     env_map = {
         "account": "PORTFOLIO_ACCOUNT",
         "storage.backend": "PORTFOLIO_STORAGE_BACKEND",
+        "nav.disable_runtime_validation": "PORTFOLIO_NAV_DISABLE_RUNTIME_VALIDATION",
         "feishu.app_token": "FEISHU_APP_TOKEN",
         "feishu.app_id": "FEISHU_APP_ID",
         "feishu.app_secret": "FEISHU_APP_SECRET",

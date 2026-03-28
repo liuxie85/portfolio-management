@@ -17,6 +17,47 @@ from .reporting_utils import normalize_holding_type
 from . import config
 
 
+def _snapshot_digest(snapshots) -> str:
+    """Compute a stable digest of holdings snapshot content.
+
+    We intentionally ignore fields that may change due to pricing noise if desired.
+    Current policy: include quantity + market_value_cny + currency + market + asset_id.
+    """
+    import json
+    import hashlib
+
+    items = []
+    for s in snapshots:
+        items.append({
+            'account': s.account,
+            'as_of': s.as_of,
+            'asset_id': s.asset_id,
+            'market': s.market,
+            'currency': s.currency,
+            'quantity': s.quantity,
+            'market_value_cny': s.market_value_cny,
+        })
+    items.sort(key=lambda x: (x['account'], x['as_of'], x['market'], x['asset_id']))
+    raw = json.dumps(items, ensure_ascii=False, separators=(',', ':'), sort_keys=True).encode('utf-8')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _read_local_snapshot_digest(*, account: str, as_of: str) -> str | None:
+    try:
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / '.data' / 'holdings_snapshot' / account / f'{as_of}.json'
+        if not p.exists():
+            return None
+        import json
+        data = json.loads(p.read_text(encoding='utf-8'))
+        digest = data.get('digest')
+        if isinstance(digest, str) and digest:
+            return digest
+    except Exception:
+        return None
+    return None
+
+
 class PortfolioManager:
     """组合管理器"""
 
@@ -444,7 +485,9 @@ class PortfolioManager:
     # ========== 估值计算 ==========
 
     def calculate_valuation(self, account: str, fetch_prices: bool = True, price_timeout_seconds: int = 25,
-                            allow_stale_price_fallback: bool = True) -> PortfolioValuation:
+                            allow_stale_price_fallback: bool = True,
+                            price_market_closed_ttl_multiplier: float = 1.0,
+                            prefer_cache_if_available: bool = False) -> PortfolioValuation:
         """计算账户估值
 
         Args:
@@ -467,6 +510,33 @@ class PortfolioManager:
             # 构建名称映射
             name_map = {h.asset_id: h.asset_name for h in holdings}
 
+            # If markets are closed, we can tolerate longer cache TTL to avoid slow realtime fetch.
+            try:
+                from .market_time import MarketTimeUtil
+                from .models import AssetType
+
+                mkt_map = {}
+                for h in holdings:
+                    at = h.asset_type
+                    atv = at.value if at else None
+                    if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
+                        mkt_map[h.asset_id] = 'cn'
+                    elif atv in (AssetType.HK_STOCK.value, AssetType.HK_FUND.value):
+                        mkt_map[h.asset_id] = 'hk'
+                    elif atv in (AssetType.US_STOCK.value, AssetType.US_FUND.value):
+                        mkt_map[h.asset_id] = 'us'
+
+                now_open_cn = MarketTimeUtil.is_cn_market_open()
+                now_open_hk = MarketTimeUtil.is_hk_market_open()
+                now_open_us = MarketTimeUtil.is_us_market_open()
+
+                any_open = (now_open_cn or now_open_hk or now_open_us)
+                prefer_cache_if_available_flag = bool(prefer_cache_if_available or (not any_open))
+                market_closed_ttl_multiplier = (price_market_closed_ttl_multiplier if not any_open else 1.0)
+            except Exception:
+                prefer_cache_if_available_flag = False
+                market_closed_ttl_multiplier = 1.0
+
             # 用守护线程实现总超时，避免某些数据源卡死导致日报/record_nav 卡住
             import threading
             _fetch_result = {'prices': None, 'error': None}
@@ -476,6 +546,9 @@ class PortfolioManager:
                     _fetch_result['prices'] = self.price_fetcher.fetch_batch(
                         [h.asset_id for h in holdings],
                         name_map=name_map,
+                        asset_type_map={h.asset_id: h.asset_type for h in holdings},
+                        market_closed_ttl_multiplier=market_closed_ttl_multiplier,
+                        prefer_cache_if_available=bool(prefer_cache_if_available_flag),
                         use_concurrent=True,
                         skip_us=False
                     )
@@ -499,6 +572,9 @@ class PortfolioManager:
                     prices = self.price_fetcher.fetch_batch(
                         [h.asset_id for h in holdings],
                         name_map=name_map,
+                        asset_type_map={h.asset_id: h.asset_type for h in holdings},
+                        market_closed_ttl_multiplier=market_closed_ttl_multiplier,
+                        prefer_cache_if_available=bool(prefer_cache_if_available_flag),
                         use_concurrent=False,
                         skip_us=True,
                         use_cache_only=True
@@ -745,8 +821,37 @@ class PortfolioManager:
                             source='record_nav',
                         )
                     )
-                # Use the same dry_run flag to avoid side effects during rehearsals.
-                self.storage.batch_upsert_holding_snapshots(snapshots, dry_run=dry_run)
+
+                # Skip snapshot write if unchanged compared to existing Feishu snapshot for the same day.
+                # This ensures we write at most once per day unless content truly changes.
+                dry_preview = self.storage.batch_upsert_holding_snapshots(snapshots, dry_run=True)
+                should_write_snapshot = bool(dry_preview.get('to_create') or dry_preview.get('to_update'))
+
+                if should_write_snapshot:
+                    self.storage.batch_upsert_holding_snapshots(snapshots, dry_run=dry_run)
+                else:
+                    # No change: skip Feishu write to reduce latency/quota usage.
+                    pass
+
+                # Local snapshot (secondary): best-effort write for debugging / fallback (does not affect correctness).
+                try:
+                    from pathlib import Path
+                    import json
+                    out_dir = Path(__file__).resolve().parents[1] / '.data' / 'holdings_snapshot' / account
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out_file = out_dir / f'{as_of}.json'
+                    digest = _snapshot_digest(snapshots)
+
+                    payload = {
+                        'as_of': as_of,
+                        'account': account,
+                        'count': len(snapshots),
+                        'digest': digest,
+                        'snapshots': [s.model_dump() for s in snapshots],
+                    }
+                    out_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+                except Exception:
+                    pass
             except Exception as e:
                 # Snapshot is part of accuracy/auditability contract; do not silently ignore.
                 raise RuntimeError(f"Failed to write holdings_snapshot for {today} ({account}): {e}") from e
@@ -761,18 +866,21 @@ class PortfolioManager:
             yearly_data=yearly_data, cumulative_cash_flow=cumulative_cash_flow,
             start_year=start_year, **calc,
         )
-        self._validate_nav_record(
-            nav_record=nav_record,
-            last_nav=last_nav,
-            prev_month_end_nav=prev_month_end_nav,
-            prev_year_end_nav=prev_year_end_nav,
-            daily_cash_flow=daily_cash_flow,
-            monthly_cash_flow=monthly_cash_flow,
-            yearly_cash_flow=yearly_cash_flow,
-            gap_cash_flow=gap_cash_flow,
-            initial_value=calc.get('initial_value'),
-            cumulative_cash_flow=cumulative_cash_flow,
-        )
+        # Runtime self-check can be expensive (extra quantize/compare). Keep it on by default,
+        # but allow scheduled jobs to skip it for speed.
+        if not bool(config.get('nav.disable_runtime_validation', False)):
+            self._validate_nav_record(
+                nav_record=nav_record,
+                last_nav=last_nav,
+                prev_month_end_nav=prev_month_end_nav,
+                prev_year_end_nav=prev_year_end_nav,
+                daily_cash_flow=daily_cash_flow,
+                monthly_cash_flow=monthly_cash_flow,
+                yearly_cash_flow=yearly_cash_flow,
+                gap_cash_flow=gap_cash_flow,
+                initial_value=calc.get('initial_value'),
+                cumulative_cash_flow=cumulative_cash_flow,
+            )
         if persist:
             self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
 
