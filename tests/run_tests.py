@@ -46,10 +46,17 @@ def test_currency_fallback_venue_hint():
 
 
 def main() -> None:
+    from tests.test_asset_utils_market_suffix import (
+        test_validate_code_strips_market_suffix_and_normalizes_hk,
+        test_detect_market_type_respects_suffix,
+    )
+
     tests = [
         test_currency_from_us_ticker_suffix,
         test_currency_from_hk_ticker_suffix,
         test_currency_fallback_venue_hint,
+        test_validate_code_strips_market_suffix_and_normalizes_hk,
+        test_detect_market_type_respects_suffix,
     ]
     for t in tests:
         t()
