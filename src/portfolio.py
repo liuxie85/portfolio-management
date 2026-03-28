@@ -747,6 +747,23 @@ class PortfolioManager:
                     )
                 # Use the same dry_run flag to avoid side effects during rehearsals.
                 self.storage.batch_upsert_holding_snapshots(snapshots, dry_run=dry_run)
+
+                # Local snapshot (secondary): best-effort write for debugging / fallback (does not affect correctness).
+                try:
+                    from pathlib import Path
+                    import json
+                    out_dir = Path(__file__).resolve().parents[1] / '.data' / 'holdings_snapshot' / account
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out_file = out_dir / f'{as_of}.json'
+                    payload = {
+                        'as_of': as_of,
+                        'account': account,
+                        'count': len(snapshots),
+                        'snapshots': [s.model_dump() for s in snapshots],
+                    }
+                    out_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+                except Exception:
+                    pass
             except Exception as e:
                 # Snapshot is part of accuracy/auditability contract; do not silently ignore.
                 raise RuntimeError(f"Failed to write holdings_snapshot for {today} ({account}): {e}") from e
