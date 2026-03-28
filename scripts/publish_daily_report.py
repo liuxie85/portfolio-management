@@ -126,6 +126,10 @@ def build_report_data(price_timeout: int, dry_run: bool = False) -> dict[str, An
     skill = _get_default_skill()
     snapshot = skill.build_snapshot()
 
+    # Fetch full NAV history once and reuse it across record_nav/report.
+    # This avoids duplicate Feishu reads in a single publish run.
+    navs_all = skill.storage.get_nav_history(skill.account, days=9999)
+
     # NOTE: skill_api.record_nav() 默认 dry_run=True（安全约束）。
     # 作为定时任务，我们在非 dry_run 模式下显式写入：dry_run=False 且 confirm=True。
     if dry_run:
@@ -137,7 +141,7 @@ def build_report_data(price_timeout: int, dry_run: bool = False) -> dict[str, An
         raise RuntimeError(json.dumps(nav_result, ensure_ascii=False))
 
     # Generate report using the same snapshot (no extra price fetch).
-    report = skill.generate_report(report_type="daily", record_nav=False, price_timeout=price_timeout, snapshot=snapshot)
+    report = skill.generate_report(report_type="daily", record_nav=False, price_timeout=price_timeout, snapshot=snapshot, navs=navs_all)
     if not report.get("success"):
         raise RuntimeError(json.dumps(report, ensure_ascii=False))
 
