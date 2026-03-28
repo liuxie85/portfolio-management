@@ -485,7 +485,8 @@ class PortfolioManager:
     # ========== 估值计算 ==========
 
     def calculate_valuation(self, account: str, fetch_prices: bool = True, price_timeout_seconds: int = 25,
-                            allow_stale_price_fallback: bool = True) -> PortfolioValuation:
+                            allow_stale_price_fallback: bool = True,
+                            price_market_closed_ttl_multiplier: float = 1.0) -> PortfolioValuation:
         """计算账户估值
 
         Args:
@@ -508,6 +509,31 @@ class PortfolioManager:
             # 构建名称映射
             name_map = {h.asset_id: h.asset_name for h in holdings}
 
+            # If markets are closed, we can tolerate longer cache TTL to avoid slow realtime fetch.
+            try:
+                from .market_time import MarketTimeUtil
+                from .models import AssetType
+
+                mkt_map = {}
+                for h in holdings:
+                    at = h.asset_type
+                    atv = at.value if at else None
+                    if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
+                        mkt_map[h.asset_id] = 'cn'
+                    elif atv in (AssetType.HK_STOCK.value, AssetType.HK_FUND.value):
+                        mkt_map[h.asset_id] = 'hk'
+                    elif atv in (AssetType.US_STOCK.value, AssetType.US_FUND.value):
+                        mkt_map[h.asset_id] = 'us'
+
+                now_open_cn = MarketTimeUtil.is_cn_market_open()
+                now_open_hk = MarketTimeUtil.is_hk_market_open()
+                now_open_us = MarketTimeUtil.is_us_market_open()
+
+                any_open = (now_open_cn or now_open_hk or now_open_us)
+                market_closed_ttl_multiplier = (price_market_closed_ttl_multiplier if not any_open else 1.0)
+            except Exception:
+                market_closed_ttl_multiplier = 1.0
+
             # 用守护线程实现总超时，避免某些数据源卡死导致日报/record_nav 卡住
             import threading
             _fetch_result = {'prices': None, 'error': None}
@@ -518,6 +544,7 @@ class PortfolioManager:
                         [h.asset_id for h in holdings],
                         name_map=name_map,
                         asset_type_map={h.asset_id: h.asset_type for h in holdings},
+                        market_closed_ttl_multiplier=market_closed_ttl_multiplier,
                         use_concurrent=True,
                         skip_us=False
                     )
@@ -542,6 +569,7 @@ class PortfolioManager:
                         [h.asset_id for h in holdings],
                         name_map=name_map,
                         asset_type_map={h.asset_id: h.asset_type for h in holdings},
+                        market_closed_ttl_multiplier=market_closed_ttl_multiplier,
                         use_concurrent=False,
                         skip_us=True,
                         use_cache_only=True

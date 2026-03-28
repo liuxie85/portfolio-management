@@ -195,7 +195,7 @@ class PriceFetcher:
                     market_type = 'us'
                 elif atv in (AssetType.FUND.value,):
                     market_type = 'fund'
-            ttl = MarketTimeUtil.get_cache_ttl(market_type)
+            ttl = int(MarketTimeUtil.get_cache_ttl(market_type) * market_closed_ttl_multiplier)
 
             # 计算过期时间（北京时间 naive）
             expires_at = bj_now_naive() + timedelta(seconds=ttl)
@@ -231,6 +231,7 @@ class PriceFetcher:
 
     def fetch_batch(self, codes: List[str], name_map: Dict[str, str] = None,
                     asset_type_map: Dict[str, Any] = None,
+                    market_closed_ttl_multiplier: float = 1.0,
                     force_refresh: bool = False, use_concurrent: bool = True,
                     skip_us: bool = False, use_cache_only: bool = False) -> Dict[str, Dict]:
         """批量获取价格 (智能缓存 + 并发查询)
