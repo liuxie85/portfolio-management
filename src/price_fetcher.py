@@ -187,7 +187,7 @@ class PriceFetcher:
             # 计算过期时间（北京时间 naive）
             expires_at = bj_now_naive() + timedelta(seconds=ttl)
 
-            # 检测资产类型
+            # 检测资产类型（用于 price_cache 记录；不影响 holdings 的 asset_type）
             asset_type = AssetType.OTHER
             if market_type == 'cn':
                 asset_type = AssetType.A_STOCK
