@@ -761,18 +761,21 @@ class PortfolioManager:
             yearly_data=yearly_data, cumulative_cash_flow=cumulative_cash_flow,
             start_year=start_year, **calc,
         )
-        self._validate_nav_record(
-            nav_record=nav_record,
-            last_nav=last_nav,
-            prev_month_end_nav=prev_month_end_nav,
-            prev_year_end_nav=prev_year_end_nav,
-            daily_cash_flow=daily_cash_flow,
-            monthly_cash_flow=monthly_cash_flow,
-            yearly_cash_flow=yearly_cash_flow,
-            gap_cash_flow=gap_cash_flow,
-            initial_value=calc.get('initial_value'),
-            cumulative_cash_flow=cumulative_cash_flow,
-        )
+        # Runtime self-check can be expensive (extra quantize/compare). Keep it on by default,
+        # but allow scheduled jobs to skip it for speed.
+        if not bool(config.get('nav.disable_runtime_validation', False)):
+            self._validate_nav_record(
+                nav_record=nav_record,
+                last_nav=last_nav,
+                prev_month_end_nav=prev_month_end_nav,
+                prev_year_end_nav=prev_year_end_nav,
+                daily_cash_flow=daily_cash_flow,
+                monthly_cash_flow=monthly_cash_flow,
+                yearly_cash_flow=yearly_cash_flow,
+                gap_cash_flow=gap_cash_flow,
+                initial_value=calc.get('initial_value'),
+                cumulative_cash_flow=cumulative_cash_flow,
+            )
         if persist:
             self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
 
