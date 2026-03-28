@@ -125,6 +125,9 @@ class PriceFetcher:
         self._last_tencent_batch_meta = None
 
     def fetch(self, code: str, asset_name: str = None, force_refresh: bool = False) -> Optional[Dict]:
+        # NOTE: keep local vars so code shared with fetch_batch edits doesn't break.
+        asset_type_map = None
+        market_closed_ttl_multiplier = 1.0
         """获取资产价格 (带缓存)
 
         Args:
