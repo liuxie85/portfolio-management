@@ -173,6 +173,9 @@ get_price("HKD-CASH")  # 港币汇率
 ```
 
 **返回数据结构**:
+
+> 说明：`pnl` 为 **gap**，即相对 nav_history 上一条记录的变化（不保证是“昨日”）。
+
 ```json
 {
   "success": true,
@@ -369,7 +372,7 @@ withdraw(amount=30000, remark="消费")
 
 #### 日报格式
 
-日报必须包含以下内容：
+日报必须包含以下内容（新增：MTD/YTD 与当日 gap）：
 
 ```
 ## 投资组合日报 (2025-03-17)
@@ -385,8 +388,9 @@ withdraw(amount=30000, remark="消费")
 ### 收益统计
 | 周期 | 涨幅 | 盈亏 |
 |------|------|------|
-| 当月 | +3.25% | +¥48,750 |
-| 当年 | +8.50% | +¥127,500 |
+| 当日（相对上一条记录 / gap） | - | +¥12,750 |
+| 当月（MTD） | +3.25% | +¥48,750 |
+| 当年（YTD） | +8.50% | +¥127,500 |
 | 自成立以来(CAGR) | +11.8% | - |
 
 ### Top10 持仓
@@ -418,8 +422,15 @@ withdraw(amount=30000, remark="消费")
   },
   "nav": 1.2345,
   "total_value": 1500000.00,
-  "pnl": 12750.00,
   "cash_flow": 0,
+
+  // 收益指标（口径：nav_history.pnl 为 gap = 相对上一条记录；MTD/YTD 为当月/当年累计）
+  "pnl": 12750.00,
+  "mtd_nav_change": 0.0325,
+  "ytd_nav_change": 0.0850,
+  "mtd_pnl": 48750.00,
+  "ytd_pnl": 127500.00,
+
   "top_holdings": [...],
   "distribution": [
     {"type": "a_stock", "value": 900000, "ratio": 0.60},
@@ -526,6 +537,25 @@ from skill_api import record_nav
 
 record_nav()
 ```
+
+---
+
+## HTML 日报（GitHub 风格）
+
+生成 HTML 日报并发布到 OpenClaw Publish Domain（静态站点根目录为 `/home/node/.openclaw/workspace/published`）：
+
+```bash
+cd /home/node/.openclaw/workspace/portfolio-management
+
+# 生成 HTML 到 ./public/index.html
+./.venv/bin/python scripts/generate_daily_report_html.py
+
+# 发布到 /home/node/.openclaw/workspace/published/portfolio-management/index.html
+./.venv/bin/python scripts/publish_daily_report_html_to_openclaw_pub.py
+```
+
+发布后访问：
+- `https://openclaw-pub-<instance>.imlgz.com/portfolio-management/`
 
 ---
 
