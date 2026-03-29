@@ -221,13 +221,22 @@ def render_daily_report_html(report_bundle: dict[str, Any], config: PublishConfi
     equity_value = (float(stock_value) if stock_value is not None else 0.0) + fund_value
     equity_ratio = stock_ratio + fund_ratio
     dt = report.get("date") or date.today().isoformat()
-    # nav_snapshot.history does NOT include today's synthetic NAV (it only contains persisted NAV records).
-    # Therefore, the correct '较昨日' baseline is the latest persisted NAV (usually yesterday), i.e. history[-1].
+    # Gap definition: compare "today" against the previous NAV record (not necessarily yesterday).
     prev_nav = history[-1].get("nav") if len(history) >= 1 else None
+    prev_total_value = history[-1].get("total_value") if len(history) >= 1 else None
+
     daily_change = (nav - float(prev_nav)) if prev_nav not in (None, 0) else None
     daily_return = ((nav / float(prev_nav)) - 1) if prev_nav not in (None, 0) else None
-    # Estimated daily PnL in CNY when cash_flow is 0: delta_NAV * shares
-    est_daily_pnl = (float(daily_change) * float(shares)) if (daily_change is not None and shares not in (None, 0, "")) else None
+
+    # Gap PnL is defined as NAV-history.pnl (gap vs previous record), not "today vs yesterday".
+    # We do not store gap nav_change; we only display it.
+    # Prefer using the stored pnl if present; otherwise fall back to an estimated gap pnl.
+    gap_pnl = latest.get("pnl")
+    if gap_pnl is None and (prev_total_value not in (None, 0)):
+        # Fallback estimate: Δtotal_value - cash_flow (cash_flow is already gap vs previous record)
+        gap_pnl = float(total_value) - float(prev_total_value) - float(cash_flow)
+
+    est_daily_pnl = gap_pnl
 
     rows = []
     for h in top[:10]:
