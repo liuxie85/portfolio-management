@@ -1313,7 +1313,7 @@ class PriceFetcher:
             query_code = code
 
         from .tencent_batch import fetch_batch as _tencent_fetch_batch
-        parts_map = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
+        parts_map, _meta = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
         data = parts_map.get(query_code)
         if data and len(data) > 45:
             return self._normalize_price_payload({
@@ -1417,7 +1417,7 @@ class PriceFetcher:
         query_code = f'hk{numeric_part}'
 
         from .tencent_batch import fetch_batch as _tencent_fetch_batch
-        parts_map = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
+        parts_map, _meta = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
         data = parts_map.get(query_code)
         if data and len(data) > 45:
             price = float(data[3])
