@@ -67,6 +67,10 @@ def main() -> None:
         test_cash_flow_agg_cache_updates_on_new_record,
         test_record_nav_avoids_get_nav_history_full_scan_when_preloaded,
     )
+    from tests.test_nav_bulk_upsert_minimal import (
+        test_nav_bulk_upsert_uses_single_preload_and_batch_ops_for_n_le_500,
+        test_nav_bulk_upsert_updates_nav_index_cache_incrementally,
+    )
 
     tests = [
         test_currency_from_us_ticker_suffix,
@@ -83,6 +87,8 @@ def main() -> None:
         test_nav_base_cache_month_boundary_and_invalidation_flag,
         test_cash_flow_agg_cache_updates_on_new_record,
         test_record_nav_avoids_get_nav_history_full_scan_when_preloaded,
+        test_nav_bulk_upsert_uses_single_preload_and_batch_ops_for_n_le_500,
+        test_nav_bulk_upsert_updates_nav_index_cache_incrementally,
     ]
     for t in tests:
         t()

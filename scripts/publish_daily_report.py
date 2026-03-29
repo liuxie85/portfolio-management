@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--publish-base-url", default=os.environ.get("OPENCLAW_PUBLISH_BASE_URL"), help="Base publish URL (set via env OPENCLAW_PUBLISH_BASE_URL).")
     parser.add_argument("--price-timeout", type=int, default=30, help="Price fetch timeout in seconds.")
     parser.add_argument("--dry-run", action="store_true", help="Do not persist NAV writes.")
+    parser.add_argument("--use-bulk-nav-upsert", action="store_true", help="Persist NAV through storage.upsert_nav_bulk (single-row use is optional).")
     parser.add_argument("--no-html", action="store_true", help="Do not render HTML; only record NAV + generate JSON bundle.")
     parser.add_argument("--no-publish", action="store_true", help="Do not write HTML files into reports/publish dirs.")
     parser.add_argument("--quiet", action="store_true", help="No stdout on success (scheduled mode).")
@@ -112,7 +113,7 @@ def type_label(v: str) -> str:
     }.get(v, v or "--")
 
 
-def build_report_data(price_timeout: int, dry_run: bool = False) -> dict[str, Any]:
+def build_report_data(price_timeout: int, dry_run: bool = False, use_bulk_nav_upsert: bool = False) -> dict[str, Any]:
     """Build a consistent bundle for publishing.
 
     Performance notes:
@@ -155,9 +156,21 @@ def build_report_data(price_timeout: int, dry_run: bool = False) -> dict[str, An
     # NOTE: skill_api.record_nav() 默认 dry_run=True（安全约束）。
     # 作为定时任务，我们在非 dry_run 模式下显式写入：dry_run=False 且 confirm=True。
     if dry_run:
-        nav_result = skill.record_nav(price_timeout=price_timeout, dry_run=True, confirm=False, snapshot=snapshot)
+        nav_result = skill.record_nav(
+            price_timeout=price_timeout,
+            dry_run=True,
+            confirm=False,
+            snapshot=snapshot,
+            use_bulk_persist=use_bulk_nav_upsert,
+        )
     else:
-        nav_result = skill.record_nav(price_timeout=price_timeout, dry_run=False, confirm=True, snapshot=snapshot)
+        nav_result = skill.record_nav(
+            price_timeout=price_timeout,
+            dry_run=False,
+            confirm=True,
+            snapshot=snapshot,
+            use_bulk_persist=use_bulk_nav_upsert,
+        )
 
     record_nav_ms = _ms() - t_record_nav
 
@@ -375,7 +388,11 @@ def main() -> None:
 
     with _suppress_internal_stdout(enabled=(not bool(args.debug_internal))):
         t1 = _now_ms()
-        report_bundle = build_report_data(price_timeout=args.price_timeout, dry_run=args.dry_run)
+        report_bundle = build_report_data(
+            price_timeout=args.price_timeout,
+            dry_run=args.dry_run,
+            use_bulk_nav_upsert=bool(args.use_bulk_nav_upsert),
+        )
         timings['build_report_data_ms'] = _now_ms() - t1
 
         # Fast mode: only compute bundle (record_nav + generate_report + get_nav)

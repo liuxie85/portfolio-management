@@ -1699,7 +1699,7 @@ class PortfolioSkill:
 
     def record_nav(self, price_timeout: int = 30, snapshot: Optional[Dict[str, Any]] = None,
                    overwrite_existing: bool = True, dry_run: bool = True,
-                   confirm: bool = False) -> Dict[str, Any]:
+                   confirm: bool = False, use_bulk_persist: bool = False) -> Dict[str, Any]:
         """记录今日净值（独立方法，与报告生成解耦）
 
         ⚠️ 安全约束：默认 dry_run=True，避免被日报/调试调用误写入历史。
@@ -1733,6 +1733,7 @@ class PortfolioSkill:
                 persist=True,
                 overwrite_existing=overwrite_existing,
                 dry_run=dry_run,
+                use_bulk_persist=use_bulk_persist,
             )
             storage_result = None
             result = {
@@ -1988,7 +1989,7 @@ def full_report(price_timeout: int = 30) -> Dict:
     return _get_default_skill().full_report(price_timeout=price_timeout)
 
 def record_nav(price_timeout: int = 30, dry_run: bool = True, confirm: bool = False,
-               overwrite_existing: bool = True) -> Dict:
+               overwrite_existing: bool = True, use_bulk_persist: bool = False) -> Dict:
     """记录今日净值
 
     ⚠️ 默认 dry_run=True，避免误写入。
@@ -1999,6 +2000,7 @@ def record_nav(price_timeout: int = 30, dry_run: bool = True, confirm: bool = Fa
         dry_run=dry_run,
         confirm=confirm,
         overwrite_existing=overwrite_existing,
+        use_bulk_persist=use_bulk_persist,
     )
 
 

@@ -724,7 +724,8 @@ class PortfolioManager:
 
     def record_nav(self, account: str, valuation: Optional[PortfolioValuation] = None,
                    nav_date: Optional[date] = None, persist: bool = True,
-                   overwrite_existing: bool = True, dry_run: bool = False) -> NAVHistory:
+                   overwrite_existing: bool = True, dry_run: bool = False,
+                   use_bulk_persist: bool = False) -> NAVHistory:
         """
         记录每日净值（按Excel账户净值sheet逻辑）
         计算字段：股票市值、现金结余、账户净值、占比、份额变动、涨幅、资产升值
@@ -888,7 +889,10 @@ class PortfolioManager:
                 cumulative_cash_flow=cumulative_cash_flow,
             )
         if persist:
-            self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
+            if use_bulk_persist and (not dry_run) and overwrite_existing:
+                self.storage.upsert_nav_bulk([nav_record], mode='replace', allow_partial=False)
+            else:
+                self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
 
         # ===== 9. 打印摘要 =====
         if persist and not dry_run:

@@ -416,6 +416,10 @@ class LocalNavIndexCache:
     - nav_history 轻量投影（用于快速回放）
     - month_end_base / year_end_base / inception_base
     - last_record
+
+    说明：
+    - append_nav_record 仅适合“新增日期”场景；
+    - upsert_nav_record(s) 支持按 date 替换或新增（用于批量回填/修复）。
     """
 
     VERSION = 1
@@ -532,42 +536,92 @@ class LocalNavIndexCache:
             else:
                 self._schedule_flush()
 
+    @classmethod
+    def _rebuild_nav_account_payload(cls, base: Dict[str, Any], navs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Rebuild derived account payload from nav_history rows."""
+        navs_sorted = sorted([dict(r) for r in navs], key=lambda r: r.get('date') or '')
+
+        month_end_base: Dict[str, Dict[str, Any]] = {}
+        year_end_base: Dict[str, Dict[str, Any]] = {}
+        for r in navs_sorted:
+            d = cls._parse_date(r.get('date'))
+            if not d:
+                continue
+            month_end_base[d.strftime('%Y-%m')] = dict(r)
+            year_end_base[str(d.year)] = dict(r)
+
+        inception_base = dict(navs_sorted[0]) if navs_sorted else None
+        last_record = dict(navs_sorted[-1]) if navs_sorted else None
+
+        out = dict(base or {})
+        out['nav_history'] = navs_sorted
+        out['month_end_base'] = month_end_base
+        out['year_end_base'] = year_end_base
+        out['inception_base'] = inception_base
+        out['last_record'] = last_record
+        out['record_count'] = len(navs_sorted)
+        if last_record:
+            out['latest_updated_at'] = last_record.get('updated_at')
+        else:
+            out['latest_updated_at'] = None
+        return out
+
+    def _save_account_navs_unlocked(self, account: str, navs: List[Dict[str, Any]], *, _flush: bool = False):
+        base = self._cache.get(account) if isinstance(self._cache.get(account), dict) else {}
+        rebuilt = self._rebuild_nav_account_payload(base, navs)
+        self._cache[account] = rebuilt
+        self._dirty_count += 1
+        self._dirty_flag = True
+        if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+            self._save_unlocked()
+        else:
+            self._schedule_flush()
+
     def append_nav_record(self, account: str, record: Dict[str, Any], *, _flush: bool = False):
         with self._lock:
             base = self._cache.get(account) if isinstance(self._cache.get(account), dict) else {}
-            base = dict(base)
             navs = list(base.get('nav_history') or [])
             navs.append(dict(record))
-            navs.sort(key=lambda r: r.get('date') or '')
+            self._save_account_navs_unlocked(account, navs, _flush=_flush)
 
-            month_end_base: Dict[str, Dict[str, Any]] = {}
-            year_end_base: Dict[str, Dict[str, Any]] = {}
+    def upsert_nav_record(self, account: str, record: Dict[str, Any], *, _flush: bool = False):
+        """按 date upsert 单条 nav 记录（存在则替换，不存在则新增）。"""
+        with self._lock:
+            base = self._cache.get(account) if isinstance(self._cache.get(account), dict) else {}
+            navs = list(base.get('nav_history') or [])
+            ds = str((record or {}).get('date') or '')
+            if not ds:
+                return
+
+            replaced = False
+            for i, r in enumerate(navs):
+                if str((r or {}).get('date') or '') == ds:
+                    navs[i] = dict(record)
+                    replaced = True
+                    break
+            if not replaced:
+                navs.append(dict(record))
+            self._save_account_navs_unlocked(account, navs, _flush=_flush)
+
+    def upsert_nav_records(self, account: str, records: List[Dict[str, Any]], *, _flush: bool = False):
+        """按 date 批量 upsert nav 记录（用于批量回填后增量刷新索引）。"""
+        if not records:
+            return
+        with self._lock:
+            base = self._cache.get(account) if isinstance(self._cache.get(account), dict) else {}
+            navs = list(base.get('nav_history') or [])
+            by_date: Dict[str, Dict[str, Any]] = {}
             for r in navs:
-                d = self._parse_date(r.get('date'))
-                if not d:
+                ds = str((r or {}).get('date') or '')
+                if ds:
+                    by_date[ds] = dict(r)
+            for r in records:
+                ds = str((r or {}).get('date') or '')
+                if not ds:
                     continue
-                month_end_base[d.strftime('%Y-%m')] = dict(r)
-                year_end_base[str(d.year)] = dict(r)
-
-            inception_base = dict(navs[0]) if navs else None
-            last_record = dict(navs[-1]) if navs else None
-
-            base['nav_history'] = navs
-            base['month_end_base'] = month_end_base
-            base['year_end_base'] = year_end_base
-            base['inception_base'] = inception_base
-            base['last_record'] = last_record
-            base['record_count'] = len(navs)
-            if last_record:
-                base['latest_updated_at'] = last_record.get('updated_at')
-
-            self._cache[account] = base
-            self._dirty_count += 1
-            self._dirty_flag = True
-            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
-                self._save_unlocked()
-            else:
-                self._schedule_flush()
+                by_date[ds] = dict(r)
+            merged = list(by_date.values())
+            self._save_account_navs_unlocked(account, merged, _flush=_flush)
 
 
 # 默认现金流聚合缓存文件路径

@@ -1769,6 +1769,36 @@ class FeishuStorage:
         self._nav_index_loaded_accounts.discard(account)
         self._nav_index_mem_cache.pop(account, None)
 
+    def _normalize_nav_date(self, nav_date: Any) -> date:
+        if isinstance(nav_date, datetime):
+            return nav_date.date()
+        if isinstance(nav_date, str):
+            return datetime.strptime(nav_date[:10], '%Y-%m-%d').date()
+        return nav_date
+
+    def _nav_to_index_row(self, nav: NAVHistory, updated_at: Optional[str] = None) -> Dict[str, Any]:
+        return {
+            'date': self._safe_date_str(nav.date),
+            'record_id': nav.record_id,
+            'total_value': nav.total_value,
+            'shares': nav.shares,
+            'nav': nav.nav,
+            'cash_flow': nav.cash_flow,
+            'pnl': nav.pnl,
+            'mtd_nav_change': nav.mtd_nav_change,
+            'ytd_nav_change': nav.ytd_nav_change,
+            'mtd_pnl': nav.mtd_pnl,
+            'ytd_pnl': nav.ytd_pnl,
+            'updated_at': updated_at,
+        }
+
+    def _apply_nav_rows_to_local_cache(self, account: str, rows: List[Dict[str, Any]]):
+        """增量更新本地 NAV 索引缓存，并失效内存镜像（下次从本地恢复，无需 API）。"""
+        if not rows:
+            return
+        self._local_nav_index_cache.upsert_nav_records(account, rows, _flush=True)
+        self._invalidate_nav_index(account)
+
     def save_nav(self, nav: NAVHistory, overwrite_existing: bool = True, dry_run: bool = False):
         """保存净值记录
 
@@ -1780,10 +1810,7 @@ class FeishuStorage:
             overwrite_existing: 是否允许覆盖同日已有记录
             dry_run: 仅演练，不实际写入
         """
-        if isinstance(nav.date, datetime):
-            nav.date = nav.date.date()
-        elif isinstance(nav.date, str):
-            nav.date = datetime.strptime(nav.date[:10], '%Y-%m-%d').date()
+        nav.date = self._normalize_nav_date(nav.date)
 
         existing = self.get_nav_on_date(nav.account, nav.date)
         if existing and existing.record_id and not overwrite_existing:
@@ -1796,6 +1823,7 @@ class FeishuStorage:
         if dry_run:
             return {"existing": bool(existing and existing.record_id), "fields": feishu_fields}
 
+        used_fields = feishu_fields
         try:
             if existing and existing.record_id:
                 self.client.update_record('nav_history', existing.record_id, feishu_fields)
@@ -1803,25 +1831,193 @@ class FeishuStorage:
             else:
                 result = self.client.create_record('nav_history', feishu_fields)
                 nav.record_id = result['record_id']
-            self._invalidate_nav_index(nav.account)
-            return
         except Exception as e:
             msg = str(e)
             if 'FieldNameNotFound' not in msg:
                 raise
 
-        # 降级重试：剔除新表中不存在的扩展字段
-        fallback_fields = dict(feishu_fields)
-        for k in ['details']:
-            fallback_fields.pop(k, None)
+            # 降级重试：剔除新表中不存在的扩展字段
+            fallback_fields = dict(feishu_fields)
+            for k in ['details']:
+                fallback_fields.pop(k, None)
+            used_fields = fallback_fields
 
-        if existing and existing.record_id:
-            self.client.update_record('nav_history', existing.record_id, fallback_fields)
-            nav.record_id = existing.record_id
-        else:
-            result = self.client.create_record('nav_history', fallback_fields)
-            nav.record_id = result['record_id']
-        self._invalidate_nav_index(nav.account)
+            if existing and existing.record_id:
+                self.client.update_record('nav_history', existing.record_id, fallback_fields)
+                nav.record_id = existing.record_id
+            else:
+                result = self.client.create_record('nav_history', fallback_fields)
+                nav.record_id = result['record_id']
+
+        nav_row = self._nav_to_index_row(nav, updated_at=used_fields.get('updated_at'))
+        self._apply_nav_rows_to_local_cache(nav.account, [nav_row])
+        return
+
+    def upsert_nav_bulk(
+        self,
+        nav_list: List[NAVHistory],
+        mode: str = 'replace',
+        allow_partial: bool = False,
+    ) -> Dict[str, Any]:
+        """批量 upsert nav_history（按 account+date 业务键）。
+
+        Args:
+            nav_list: NAVHistory 列表
+            mode:
+                - replace: 更新时 preserve_none=True（允许显式清空旧值）
+                - upsert:  更新时 preserve_none=False（不主动清空旧值）
+            allow_partial: True 时单账户失败不影响其他账户
+        """
+        if mode not in ('replace', 'upsert'):
+            raise ValueError("mode must be 'replace' or 'upsert'")
+
+        if not nav_list:
+            return {
+                'mode': mode,
+                'total': 0,
+                'updated': 0,
+                'created': 0,
+                'preloaded_accounts': [],
+                'accounts': {},
+                'errors': [],
+            }
+
+        grouped: Dict[str, List[NAVHistory]] = {}
+        for nav in nav_list:
+            if not nav or not nav.account:
+                continue
+            nav.date = self._normalize_nav_date(nav.date)
+            grouped.setdefault(nav.account, []).append(nav)
+
+        total_updated = 0
+        total_created = 0
+        preloaded_accounts: List[str] = []
+        errors: List[Dict[str, Any]] = []
+        account_results: Dict[str, Dict[str, Any]] = {}
+
+        for account in sorted(grouped.keys()):
+            navs_raw = grouped.get(account) or []
+            # 同一 account + date 多次输入时，按最后一条为准，避免重复 update/create payload
+            by_date_nav: Dict[str, NAVHistory] = {}
+            for n in navs_raw:
+                by_date_nav[self._safe_date_str(n.date)] = n
+            navs = [by_date_nav[d] for d in sorted(by_date_nav.keys())]
+            try:
+                # 1) 一次预加载索引（仅投影字段）构建 date->record_id
+                self.preload_nav_index(account)
+                preloaded_accounts.append(account)
+                idx = self.get_nav_index(account)
+                existing_by_date: Dict[str, str] = {}
+                for row in idx.get('nav_history') or []:
+                    ds = str((row or {}).get('date') or '')
+                    rid = (row or {}).get('record_id')
+                    if ds and rid:
+                        existing_by_date[ds] = rid
+
+                update_payloads: List[Dict[str, Any]] = []
+                update_rows_for_cache: List[Dict[str, Any]] = []
+                create_payloads: List[Dict[str, Any]] = []
+                create_rows_for_cache: List[Dict[str, Any]] = []
+
+                preserve_none_for_update = (mode == 'replace')
+
+                # 2) 构建 batch update/create payload
+                for nav in sorted(navs, key=lambda x: x.date):
+                    ds = self._safe_date_str(nav.date)
+                    fields = self._nav_to_dict(nav)
+                    rid = existing_by_date.get(ds)
+                    if rid:
+                        feishu_fields = self._to_feishu_fields(fields, 'nav_history', preserve_none=preserve_none_for_update)
+                        update_payloads.append({'record_id': rid, 'fields': feishu_fields})
+                        nav.record_id = rid
+                        update_rows_for_cache.append(self._nav_to_index_row(nav, updated_at=feishu_fields.get('updated_at')))
+                    else:
+                        feishu_fields = self._to_feishu_fields(fields, 'nav_history', preserve_none=False)
+                        create_payloads.append({'fields': feishu_fields})
+                        create_rows_for_cache.append(self._nav_to_index_row(nav, updated_at=feishu_fields.get('updated_at')))
+
+                # 3) 批量写入（最多 1 次 preload + 1 次 batch_update + 1 次 batch_create for N<=500）
+                if update_payloads:
+                    try:
+                        self.client.batch_update_records('nav_history', update_payloads)
+                    except Exception as e:
+                        msg = str(e)
+                        if 'FieldNameNotFound' not in msg:
+                            raise
+                        fallback_updates = []
+                        fallback_rows = []
+                        for p, row in zip(update_payloads, update_rows_for_cache):
+                            f = dict(p.get('fields') or {})
+                            f.pop('details', None)
+                            fallback_updates.append({'record_id': p['record_id'], 'fields': f})
+                            r = dict(row)
+                            r['updated_at'] = f.get('updated_at')
+                            fallback_rows.append(r)
+                        self.client.batch_update_records('nav_history', fallback_updates)
+                        update_rows_for_cache = fallback_rows
+
+                if create_payloads:
+                    try:
+                        created = self.client.batch_create_records('nav_history', create_payloads)
+                    except Exception as e:
+                        msg = str(e)
+                        if 'FieldNameNotFound' not in msg:
+                            raise
+                        fallback_creates = []
+                        for p in create_payloads:
+                            f = dict((p.get('fields') or {}))
+                            f.pop('details', None)
+                            fallback_creates.append({'fields': f})
+                        created = self.client.batch_create_records('nav_history', fallback_creates)
+                        # 同步 updated_at（若 details 被剔除，不影响）
+                        for i, p in enumerate(fallback_creates):
+                            if i < len(create_rows_for_cache):
+                                create_rows_for_cache[i]['updated_at'] = (p.get('fields') or {}).get('updated_at')
+
+                    for i, nav in enumerate([n for n in navs if self._safe_date_str(n.date) not in existing_by_date]):
+                        rec = created[i] if i < len(created) else {}
+                        rid = rec.get('record_id') or ((rec.get('record') or {}).get('record_id') if isinstance(rec, dict) else None)
+                        nav.record_id = rid
+                        if i < len(create_rows_for_cache):
+                            create_rows_for_cache[i]['record_id'] = rid
+
+                # 4) 增量刷新本地索引缓存
+                all_rows = []
+                all_rows.extend(update_rows_for_cache)
+                all_rows.extend(create_rows_for_cache)
+                if all_rows:
+                    self._apply_nav_rows_to_local_cache(account, all_rows)
+
+                updated_n = len(update_payloads)
+                created_n = len(create_payloads)
+                total_updated += updated_n
+                total_created += created_n
+                account_results[account] = {
+                    'updated': updated_n,
+                    'created': created_n,
+                    'total': len(navs),
+                }
+            except Exception as e:
+                err = {'account': account, 'error': str(e), 'count': len(navs)}
+                errors.append(err)
+                if not allow_partial:
+                    raise
+                account_results[account] = {
+                    'updated': 0,
+                    'created': 0,
+                    'total': len(navs),
+                    'error': str(e),
+                }
+
+        return {
+            'mode': mode,
+            'total': len(nav_list),
+            'updated': total_updated,
+            'created': total_created,
+            'preloaded_accounts': preloaded_accounts,
+            'accounts': account_results,
+            'errors': errors,
+        }
 
     def get_nav_history(self, account: str, days: int = 365) -> List[NAVHistory]:
         """获取净值历史（优先本地预加载索引）。"""
