@@ -20,15 +20,51 @@ class StubNavCashClient:
         self.create_record_calls: List[Dict[str, Any]] = []
 
     def list_records(self, table_name: str, filter_str: str = None, field_names: List[str] = None, page_size: int = 500):
+        """Return records with *minimal* filter support.
+
+        FeishuStorage uses list_records with server-side filter syntax such as:
+          CurrentValue.[account] = "lx"
+          CurrentValue.[dedup_key] = "abcd..."
+
+        Our stub must respect these filters; otherwise write-path dedup checks will
+        mistakenly think every record already exists.
+        """
+        import re
+
         self.list_records_calls.append({
             'table_name': table_name,
             'filter_str': filter_str,
             'field_names': list(field_names or []),
         })
+
+        def _apply_filter(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            if not filter_str:
+                return rows
+
+            # Very small parser: extract equality conditions on a single field.
+            m = re.search(r"CurrentValue\.\[(?P<field>[^\]]+)\]\s*=\s*\"(?P<value>[^\"]*)\"", filter_str)
+            if not m:
+                return rows
+            field = m.group('field')
+            value = m.group('value')
+
+            filtered = []
+            for r in rows:
+                v = (r.get('fields') or {}).get(field)
+                if v is None:
+                    continue
+                # Dates may be encoded as string or int timestamp; for these tests we only
+                # filter on account/dedup_key so keep it simple.
+                if str(v) == value:
+                    filtered.append(r)
+            return filtered
+
         if table_name == 'nav_history':
-            return [{'record_id': r['record_id'], 'fields': dict(r['fields'])} for r in self._nav_records]
+            rows = [{'record_id': r['record_id'], 'fields': dict(r['fields'])} for r in self._nav_records]
+            return _apply_filter(rows)
         if table_name == 'cash_flow':
-            return [{'record_id': r['record_id'], 'fields': dict(r['fields'])} for r in self._cash_records]
+            rows = [{'record_id': r['record_id'], 'fields': dict(r['fields'])} for r in self._cash_records]
+            return _apply_filter(rows)
         return []
 
     def create_record(self, table_name: str, fields: Dict[str, Any]):
