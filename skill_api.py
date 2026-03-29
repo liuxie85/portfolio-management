@@ -1393,6 +1393,12 @@ class PortfolioSkill:
                 "nav": nav.get("nav"),
                 "total_value": nav.get("total_value"),
                 "cash_flow": nav.get("cash_flow"),
+                # 与 full_report()['nav'] 对齐，补充净值收益指标（向后兼容：仅新增字段）
+                "pnl": nav.get("pnl"),
+                "mtd_nav_change": nav.get("mtd_nav_change"),
+                "ytd_nav_change": nav.get("ytd_nav_change"),
+                "mtd_pnl": nav.get("mtd_pnl"),
+                "ytd_pnl": nav.get("ytd_pnl"),
                 "top_holdings": full.get("top_holdings"),
                 "cagr": cagr_value,
                 "cagr_pct": cagr_pct_value,
