@@ -6,7 +6,7 @@ import json
 import re
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 
 from .models import (
     Holding, Transaction, CashFlow, NAVHistory, PriceCache,
@@ -38,6 +38,11 @@ class FeishuStorage:
         # 内存缓存：减少 API 调用次数
         # key: "asset_id:account:market" -> value: record_id
         self._holding_id_cache: Dict[str, str] = {}
+        # key: "asset_id:account:market" -> value: holding fields snapshot（含 record_id）
+        self._holding_fields_cache: Dict[str, Dict[str, Any]] = {}
+        # 持仓索引预加载状态
+        self._holdings_index_loaded_all: bool = False
+        self._holdings_index_loaded_accounts: set[str] = set()
 
         # 防重缓存：本地 Set 预检，避免重复 API 查询
         # key: request_id/dedup_key -> value: record_id (或 True 表示已存在)
@@ -51,10 +56,97 @@ class FeishuStorage:
         """生成持仓缓存 key"""
         return f"{asset_id}:{account}:{market or ''}"
 
+    HOLDING_PROJECTION_FIELDS: List[str] = [
+        'asset_id', 'asset_name', 'asset_type', 'account', 'market',
+        'quantity', 'avg_cost', 'currency', 'asset_class', 'industry', 'tag',
+        'created_at', 'updated_at'
+    ]
+
     def _invalidate_holding_cache(self, asset_id: str, account: str, market: Optional[str]):
         """清除持仓缓存"""
         cache_key = self._get_holding_cache_key(asset_id, account, market)
         self._holding_id_cache.pop(cache_key, None)
+        self._holding_fields_cache.pop(cache_key, None)
+
+    def _put_holding_cache(self, holding: Holding):
+        """写入单条持仓到内存缓存（record_id + 字段快照）"""
+        if not holding or not holding.record_id:
+            return
+        cache_key = self._get_holding_cache_key(holding.asset_id, holding.account, holding.market)
+        self._holding_id_cache[cache_key] = holding.record_id
+        self._holding_fields_cache[cache_key] = {
+            'record_id': holding.record_id,
+            'asset_id': holding.asset_id,
+            'asset_name': holding.asset_name,
+            'asset_type': holding.asset_type.value if holding.asset_type else None,
+            'account': holding.account,
+            'market': holding.market or '',
+            'quantity': holding.quantity,
+            'avg_cost': holding.avg_cost,
+            'currency': holding.currency,
+            'asset_class': holding.asset_class.value if holding.asset_class else None,
+            'industry': holding.industry.value if holding.industry else None,
+            'tag': holding.tag or [],
+            'created_at': holding.created_at.strftime(DATETIME_FORMAT) if holding.created_at else None,
+            'updated_at': holding.updated_at.strftime(DATETIME_FORMAT) if holding.updated_at else None,
+        }
+
+    def _get_holding_from_cache(self, asset_id: str, account: str, market: Optional[str]) -> Optional[Holding]:
+        """从内存缓存读取单条持仓"""
+        cache_key = self._get_holding_cache_key(asset_id, account, market)
+        cached = self._holding_fields_cache.get(cache_key)
+        if not cached:
+            return None
+        return self._dict_to_holding(dict(cached))
+
+    def _get_holding_from_cache_any_market(self, asset_id: str, account: str) -> Optional[Holding]:
+        """market 未指定时，从缓存中匹配任意 market（优先空 market）。"""
+        preferred_key = self._get_holding_cache_key(asset_id, account, None)
+        preferred = self._holding_fields_cache.get(preferred_key)
+        if preferred:
+            return self._dict_to_holding(dict(preferred))
+
+        prefix = f"{asset_id}:{account}:"
+        for key, cached in self._holding_fields_cache.items():
+            if key.startswith(prefix):
+                return self._dict_to_holding(dict(cached))
+        return None
+
+    def preload_holdings_index(self, account: Optional[str] = None) -> Dict[str, Any]:
+        """预加载 holdings 索引与字段快照到内存。
+
+        - 一次 list_records（可选 account 过滤）
+        - 构建 business_key=(asset_id,account,market)->record_id
+        - 同步构建字段快照，供 get_holding / upsert_holding / update_holding_quantity 复用
+        """
+        filter_str = None
+        if account:
+            filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
+
+        records = self.client.list_records(
+            'holdings',
+            filter_str=filter_str,
+            field_names=self.HOLDING_PROJECTION_FIELDS,
+        )
+
+        loaded_count = 0
+        for record in records:
+            fields = self._from_feishu_fields(record.get('fields') or {}, 'holdings')
+            fields['record_id'] = record['record_id']
+            holding = self._dict_to_holding(fields)
+            self._put_holding_cache(holding)
+            loaded_count += 1
+
+        if account:
+            self._holdings_index_loaded_accounts.add(account)
+        else:
+            self._holdings_index_loaded_all = True
+
+        return {
+            'account': account,
+            'loaded': loaded_count,
+            'scope': 'account' if account else 'all',
+        }
 
     @staticmethod
     def _to_decimal(v: Any) -> Decimal:
@@ -380,52 +472,68 @@ class FeishuStorage:
     # ========== holdings 持仓操作 ==========
 
     def get_holding(self, asset_id: str, account: str, market: Optional[str] = None) -> Optional[Holding]:
-        """获取单个持仓 (带缓存预热)"""
-        # 飞书 API 不支持 OR，需要分两次查询
-        # 先查指定 market 的
+        """获取单个持仓（优先使用内存索引与快照）"""
+        # 1) 先查内存快照
+        cached_holding = self._get_holding_from_cache(asset_id, account, market)
+        if not cached_holding and market is None:
+            cached_holding = self._get_holding_from_cache_any_market(asset_id, account)
+        if cached_holding:
+            return cached_holding
+
+        # 2) 未命中时，优先预加载 account 级索引（单账户写入场景最常见）
+        if account and (not self._holdings_index_loaded_all) and (account not in self._holdings_index_loaded_accounts):
+            self.preload_holdings_index(account=account)
+            cached_holding = self._get_holding_from_cache(asset_id, account, market)
+            if not cached_holding and market is None:
+                cached_holding = self._get_holding_from_cache_any_market(asset_id, account)
+            if cached_holding:
+                return cached_holding
+
+        # 3) 若当前 account 已完成预加载仍未命中，可直接判定不存在，避免重复 list_records
+        if self._holdings_index_loaded_all or (account in self._holdings_index_loaded_accounts):
+            return None
+
+        # 4) 回退到 API 精确查询（仅必要字段）
         if market:
-            filter_str = f'CurrentValue.[asset_id] = "{self._escape_filter_value(asset_id)}" AND CurrentValue.[account] = "{self._escape_filter_value(account)}" AND CurrentValue.[market] = "{self._escape_filter_value(market)}"'
-            records = self.client.list_records('holdings', filter_str=filter_str)
-            if records:
-                record = records[0]
-                fields = self._from_feishu_fields(record['fields'], 'holdings')
-                fields['record_id'] = record['record_id']
-
-                # 缓存 record_id
-                cache_key = self._get_holding_cache_key(asset_id, account, market)
-                self._holding_id_cache[cache_key] = record['record_id']
-
-                return self._dict_to_holding(fields)
+            filter_str = (
+                f'CurrentValue.[asset_id] = "{self._escape_filter_value(asset_id)}" '
+                f'AND CurrentValue.[account] = "{self._escape_filter_value(account)}" '
+                f'AND CurrentValue.[market] = "{self._escape_filter_value(market)}"'
+            )
         else:
-            # 没有指定 market，先查有 market 的，再查空的
-            filter_str = f'CurrentValue.[asset_id] = "{self._escape_filter_value(asset_id)}" AND CurrentValue.[account] = "{self._escape_filter_value(account)}"'
-            records = self.client.list_records('holdings', filter_str=filter_str)
+            filter_str = (
+                f'CurrentValue.[asset_id] = "{self._escape_filter_value(asset_id)}" '
+                f'AND CurrentValue.[account] = "{self._escape_filter_value(account)}"'
+            )
 
-            if records:
-                # 优先返回 market 为空的记录，其次是第一个
-                for record in records:
-                    if not record['fields'].get('market'):
-                        fields = self._from_feishu_fields(record['fields'], 'holdings')
-                        fields['record_id'] = record['record_id']
+        records = self.client.list_records(
+            'holdings',
+            filter_str=filter_str,
+            field_names=self.HOLDING_PROJECTION_FIELDS,
+        )
+        if not records:
+            return None
 
-                        # 缓存 record_id
-                        cache_key = self._get_holding_cache_key(asset_id, account, market)
-                        self._holding_id_cache[cache_key] = record['record_id']
+        # 不指定 market 时，优先 market 为空的记录
+        selected = records[0]
+        if not market:
+            for record in records:
+                if not (record.get('fields') or {}).get('market'):
+                    selected = record
+                    break
 
-                        return self._dict_to_holding(fields)
-                # 返回第一条
-                record = records[0]
-                fields = self._from_feishu_fields(record['fields'], 'holdings')
-                fields['record_id'] = record['record_id']
+        fields = self._from_feishu_fields(selected.get('fields') or {}, 'holdings')
+        fields['record_id'] = selected['record_id']
+        holding = self._dict_to_holding(fields)
+        self._put_holding_cache(holding)
 
-                # 缓存 record_id（使用返回记录的 market）
-                record_market = record['fields'].get('market', '')
-                cache_key = self._get_holding_cache_key(asset_id, account, record_market or None)
-                self._holding_id_cache[cache_key] = record['record_id']
+        # 兼容旧逻辑：未指定 market 时，额外给 market='' 的查询 key 做一份映射
+        if market is None and holding.market:
+            default_key = self._get_holding_cache_key(asset_id, account, None)
+            self._holding_id_cache[default_key] = holding.record_id
+            self._holding_fields_cache[default_key] = dict(self._holding_fields_cache[self._get_holding_cache_key(asset_id, account, holding.market)])
 
-                return self._dict_to_holding(fields)
-
-        return None
+        return holding
 
     def get_holdings(self, account: Optional[str] = None, asset_type: Optional[str] = None, include_empty: bool = False) -> List[Holding]:
         """获取持仓列表
@@ -444,13 +552,18 @@ class FeishuStorage:
             conditions.append(f'CurrentValue.[asset_type] = "{asset_type}"')
 
         filter_str = ' AND '.join(conditions) if conditions else None
-        records = self.client.list_records('holdings', filter_str=filter_str)
+        records = self.client.list_records(
+            'holdings',
+            filter_str=filter_str,
+            field_names=self.HOLDING_PROJECTION_FIELDS,
+        )
 
         holdings = []
         for record in records:
-            fields = self._from_feishu_fields(record['fields'], 'holdings')
+            fields = self._from_feishu_fields(record.get('fields') or {}, 'holdings')
             fields['record_id'] = record['record_id']
             holding = self._dict_to_holding(fields)
+            self._put_holding_cache(holding)
 
             # 在代码中过滤 quantity <= 0 的记录（除非 include_empty=True）
             if not include_empty and holding.quantity <= 0:
@@ -463,65 +576,20 @@ class FeishuStorage:
         return holdings
 
     def upsert_holding(self, holding: Holding) -> Holding:
-        """插入或更新持仓 (带内存缓存优化)"""
+        """插入或更新持仓（优先使用预加载索引与内存快照）"""
         from .time_utils import bj_now_naive
 
         now = bj_now_naive()
-        cache_key = self._get_holding_cache_key(
-            holding.asset_id, holding.account, holding.market
-        )
 
-        # 1. 尝试从缓存获取 record_id
-        cached_record_id = self._holding_id_cache.get(cache_key)
-
-        if cached_record_id:
-            # 2a. 缓存命中：直接尝试更新（乐观更新）
-            try:
-                # 需要先获取当前数量（累加逻辑）
-                existing = self.get_holding(
-                    holding.asset_id, holding.account, holding.market
-                )
-                if existing and existing.record_id:
-                    is_cash_like = (existing.asset_type and existing.asset_type.value in ('cash', 'mmf'))
-                    new_quantity = self._quantize_money(existing.quantity + holding.quantity) if is_cash_like else (existing.quantity + holding.quantity)
-                    update_fields = {
-                        'quantity': new_quantity,
-                        'updated_at': now.strftime(DATETIME_FORMAT)
-                    }
-
-                    # 更新名称（如果新名称更完整）
-                    new_name = holding.asset_name or existing.asset_name
-                    if new_name and len(new_name) > len(existing.asset_name or ''):
-                        update_fields['asset_name'] = new_name
-                        print(f"[持仓名称更新] {existing.asset_name} -> {new_name}")
-
-                    self.client.update_record(
-                        'holdings', cached_record_id, update_fields
-                    )
-                    holding.record_id = cached_record_id
-                    holding.updated_at = now
-                    return holding
-                else:
-                    # 缓存过期或记录被删除，清除缓存
-                    self._invalidate_holding_cache(
-                        holding.asset_id, holding.account, holding.market
-                    )
-            except Exception as e:
-                # 更新失败（记录可能被删除），清除缓存重试
-                print(f"[缓存更新失败] {cache_key}: {e}")
-                self._invalidate_holding_cache(
-                    holding.asset_id, holding.account, holding.market
-                )
-
-        # 2b. 缓存未命中或更新失败：查询后决定创建或更新
-        existing = self.get_holding(
-            holding.asset_id, holding.account, holding.market
-        )
+        # 先读缓存快照；未命中时 get_holding 会按需触发 account 级 preload
+        existing = self.get_holding(holding.asset_id, holding.account, holding.market)
 
         if existing and existing.record_id:
-            # 更新现有记录
             is_cash_like = (existing.asset_type and existing.asset_type.value in ('cash', 'mmf'))
-            new_quantity = self._quantize_money(existing.quantity + holding.quantity) if is_cash_like else (existing.quantity + holding.quantity)
+            new_quantity = (
+                self._quantize_money(existing.quantity + holding.quantity)
+                if is_cash_like else (existing.quantity + holding.quantity)
+            )
             update_fields = {
                 'quantity': new_quantity,
                 'updated_at': now.strftime(DATETIME_FORMAT)
@@ -533,32 +601,33 @@ class FeishuStorage:
                 update_fields['asset_name'] = new_name
                 print(f"[持仓名称更新] {existing.asset_name} -> {new_name}")
 
-            self.client.update_record(
-                'holdings', existing.record_id, update_fields
-            )
+            self.client.update_record('holdings', existing.record_id, update_fields)
+
+            # 更新返回值与缓存
+            existing.quantity = new_quantity
+            existing.updated_at = now
+            if 'asset_name' in update_fields:
+                existing.asset_name = update_fields['asset_name']
+
             holding.record_id = existing.record_id
             holding.updated_at = now
+            self._put_holding_cache(existing)
+            return holding
 
-            # 缓存 record_id
-            self._holding_id_cache[cache_key] = existing.record_id
-        else:
-            # 创建新记录
-            holding.created_at = now
-            holding.updated_at = now
+        # 不存在则创建
+        holding.created_at = now
+        holding.updated_at = now
 
-            fields = self._holding_to_dict(holding)
-            feishu_fields = self._to_feishu_fields(fields, 'holdings')
+        fields = self._holding_to_dict(holding)
+        feishu_fields = self._to_feishu_fields(fields, 'holdings')
 
-            result = self.client.create_record('holdings', feishu_fields)
-            holding.record_id = result['record_id']
-
-            # 缓存新记录的 record_id
-            self._holding_id_cache[cache_key] = result['record_id']
-
+        result = self.client.create_record('holdings', feishu_fields)
+        holding.record_id = result['record_id']
+        self._put_holding_cache(holding)
         return holding
 
     def update_holding_quantity(self, asset_id: str, account: str, quantity_change: float, market: Optional[str] = None):
-        """更新持仓数量"""
+        """更新持仓数量（优先使用预加载索引与内存快照）"""
         from .time_utils import bj_now_naive
 
         holding = self.get_holding(asset_id, account, market)
@@ -567,17 +636,24 @@ class FeishuStorage:
 
         is_cash_like = (holding.asset_type and holding.asset_type.value in ('cash', 'mmf'))
         new_quantity = self._quantize_money(holding.quantity + quantity_change) if is_cash_like else (holding.quantity + quantity_change)
+        now_str = bj_now_naive().strftime('%Y-%m-%d %H:%M:%S')
         update_fields = {
             'quantity': new_quantity,
-            'updated_at': bj_now_naive().strftime('%Y-%m-%d %H:%M:%S')
+            'updated_at': now_str
         }
         self.client.update_record('holdings', holding.record_id, update_fields)
+
+        # 同步内存缓存
+        holding.quantity = new_quantity
+        holding.updated_at = datetime.strptime(now_str, DATETIME_FORMAT)
+        self._put_holding_cache(holding)
 
     def delete_holding_if_zero(self, asset_id: str, account: str, market: Optional[str] = None):
         """如果持仓为0则删除（容忍极小浮点残值）"""
         holding = self.get_holding(asset_id, account, market)
         if holding and holding.record_id and abs(holding.quantity) <= 1e-8:
             self.client.delete_record('holdings', holding.record_id)
+            self._invalidate_holding_cache(asset_id, account, market)
 
     def delete_holding_by_record_id(self, record_id: str) -> bool:
         """通过记录ID删除持仓"""

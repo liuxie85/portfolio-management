@@ -53,6 +53,11 @@ def main() -> None:
     from tests.test_price_fetcher_single_fetch_cache_only import (
         test_single_fetch_cache_only_and_stale_fallback,
     )
+    from tests.test_holdings_preload_minimal import (
+        test_preload_builds_index_and_projection_and_avoids_refetch,
+        test_upsert_uses_preloaded_cache_for_batch_updates,
+        test_upsert_create_after_preload_missing_key_without_refetch,
+    )
 
     tests = [
         test_currency_from_us_ticker_suffix,
@@ -61,6 +66,9 @@ def main() -> None:
         test_validate_code_strips_market_suffix_and_normalizes_hk,
         test_detect_market_type_respects_suffix,
         test_single_fetch_cache_only_and_stale_fallback,
+        test_preload_builds_index_and_projection_and_avoids_refetch,
+        test_upsert_uses_preloaded_cache_for_batch_updates,
+        test_upsert_create_after_preload_missing_key_without_refetch,
     ]
     for t in tests:
         t()
