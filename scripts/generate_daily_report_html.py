@@ -157,7 +157,7 @@ def render_html(bundle: Dict[str, Any]) -> str:
       .wrap {{ margin: 16px auto 40px; }}
       .title {{ font-size: 22px; }}
       .sub {{ font-size: 12px; }}
-      .grid {{ grid-template-columns: 1fr; gap: 10px; }}
+      .grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
       .card {{ padding: 12px; border-radius: 12px; }}
       .kpi-title {{ font-size: 11px; margin-bottom: 6px; }}
       .kpi-value {{ font-size: 20px; }}
@@ -167,6 +167,10 @@ def render_html(bundle: Dict[str, Any]) -> str:
       /* Hide less important columns on very small screens */
       table.holdings th:nth-child(3), table.holdings td:nth-child(3) {{ display: none; }} /* Market */
       table.holdings th:nth-child(4), table.holdings td:nth-child(4) {{ display: none; }} /* Quantity */
+
+      /* Make KPI cards 2-per-row */
+      .grid .card {{ margin-top: 0; }}
+      .grid {{ margin-top: 12px; }}
     }}
 
     .footer {{ margin-top: 18px; color: var(--muted); font-size: 12px; }}
@@ -188,7 +192,7 @@ def render_html(bundle: Dict[str, Any]) -> str:
       <div class='card'><div class='kpi-title'>Daily PnL</div><div class='kpi-value {kpi_class(pnl)}'>{fmt_money(pnl)}</div></div>
       <div class='card'><div class='kpi-title'>MTD return</div><div class='kpi-value {kpi_class(mtd_nav_change)}'>{fmt_pct_change(mtd_nav_change)}</div></div>
       <div class='card'><div class='kpi-title'>YTD return</div><div class='kpi-value {kpi_class(ytd_nav_change)}'>{fmt_pct_change(ytd_nav_change)}</div></div>
-      <div class='card'><div class='kpi-title'>MTD PnL / YTD PnL</div><div class='kpi-value {kpi_class((ytd_pnl if ytd_pnl is not None else mtd_pnl))}'>{fmt_money(mtd_pnl)} / {fmt_money(ytd_pnl)}</div></div>
+      <div class='card'><div class='kpi-title'>MTD / YTD PnL</div><div class='kpi-value {kpi_class((ytd_pnl if ytd_pnl is not None else mtd_pnl))}'>{fmt_money(mtd_pnl)} / {fmt_money(ytd_pnl)}</div></div>
     </div>
 
     <div class='card'>
