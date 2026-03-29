@@ -21,7 +21,7 @@ from src.feishu_storage import FeishuStorage, FeishuClient
 from src.portfolio import PortfolioManager
 from src.price_fetcher import PriceFetcher
 from src.storage import create_storage
-from src.reporting_utils import normalize_asset_type, normalization_warning
+from src.reporting_utils import normalize_asset_type, normalization_warning, is_cash_like
 from src.models import AssetType, AssetClass, Industry, Holding, NAVHistory
 from src.asset_utils import (
     validate_code as validate_asset_code,
@@ -1456,6 +1456,87 @@ class PortfolioSkill:
         else:
             return {"success": False, "error": f"不支持的报告类型: {report_type}，可选: daily/monthly/yearly"}
 
+    def _merge_daily_top_holdings(self, holdings: list, total_value: float, top_n: int = 10) -> list:
+        """日报 Top 持仓合并口径：
+        1) 同代码（跨券商/市场）合并为一行
+        2) 现金/货基（asset_type= cash/mmf 或代码后缀 -CASH/-MMF）合并为一行
+        3) 权重按 total_value 重新计算
+        """
+        if not holdings:
+            return []
+
+        merged_by_code: Dict[str, Dict[str, Any]] = {}
+        cash_bucket: Dict[str, Any] = {
+            "code": "CASH+MMF",
+            "name": "现金及货基",
+            "quantity": 0.0,
+            "type": "cash",
+            "normalized_type": "cash",
+            "market": "多券商汇总",
+            "currency": "MIXED",
+            "price": None,
+            "cny_price": None,
+            "market_value": 0.0,
+            "weight": 0.0,
+            "_parts": set(),
+        }
+
+        for h in holdings:
+            code = str(h.get("code") or "").strip()
+            if not code:
+                continue
+
+            normalized_type = h.get("normalized_type")
+            raw_type = h.get("type")
+            is_cash = bool(normalized_type == "cash" or is_cash_like(raw_type, code))
+            mv = float(h.get("market_value") or 0.0)
+            qty = float(h.get("quantity") or 0.0)
+
+            if is_cash:
+                cash_bucket["quantity"] += qty
+                cash_bucket["market_value"] += mv
+                cash_bucket["_parts"].add(code)
+                continue
+
+            key = code.upper()
+            if key not in merged_by_code:
+                merged_by_code[key] = {
+                    "code": code,
+                    "name": h.get("name"),
+                    "quantity": qty,
+                    "type": raw_type,
+                    "normalized_type": normalized_type,
+                    "market": "多券商汇总",
+                    "currency": h.get("currency") or "MIXED",
+                    "price": None,
+                    "cny_price": None,
+                    "market_value": mv,
+                    "weight": 0.0,
+                    "_parts": {code},
+                }
+            else:
+                row = merged_by_code[key]
+                row["quantity"] += qty
+                row["market_value"] += mv
+                row["_parts"].add(code)
+                # 若币种不一致，标记 MIXED
+                if row.get("currency") != (h.get("currency") or "MIXED"):
+                    row["currency"] = "MIXED"
+
+        merged_rows = list(merged_by_code.values())
+        if cash_bucket["_parts"]:
+            cash_bucket["code"] = "+".join(sorted(cash_bucket["_parts"])) if cash_bucket["_parts"] else "CASH+MMF"
+            cash_bucket["name"] = "现金及货基(合并)"
+            merged_rows.append(cash_bucket)
+
+        for row in merged_rows:
+            row.pop("_parts", None)
+            mv = float(row.get("market_value") or 0.0)
+            row["weight"] = (mv / total_value) if total_value > 0 else 0.0
+
+        merged_rows.sort(key=lambda x: float(x.get("market_value") or 0.0), reverse=True)
+        return merged_rows[:top_n]
+
     def full_report(self, price_timeout: int = 30, snapshot: Optional[Dict[str, Any]] = None, navs: Optional[list] = None) -> Dict[str, Any]:
         """生成完整报告（只读，不记录净值）
 
@@ -1581,8 +1662,12 @@ class PortfolioSkill:
             yearly_return = self._calc_year_return(current_year, _navs=working_navs)
             since_inception = self._calc_since_inception_return(_navs=working_navs)
 
-            # 获取 top10 持仓列表
-            top_holdings_list = holdings_data.get("holdings", [])[:10]
+            # 获取 top10 持仓列表（日报口径：同代码跨券商合并 + 现金/货基合并）
+            top_holdings_list = self._merge_daily_top_holdings(
+                holdings=holdings_data.get("holdings", []),
+                total_value=holdings_data.get("total_value", 0) or 0,
+                top_n=10,
+            )
 
             return {
                 "success": True,

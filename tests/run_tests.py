@@ -72,6 +72,9 @@ def main() -> None:
         test_nav_bulk_upsert_upsert_mode_keeps_existing_cache_values_for_none_fields,
         test_nav_bulk_upsert_updates_nav_index_cache_incrementally,
     )
+    from tests.test_daily_top_holdings_merge_minimal import (
+        test_full_report_top_holdings_merge_duplicates_and_cash_mmf_bucket,
+    )
 
     tests = [
         test_currency_from_us_ticker_suffix,
@@ -91,6 +94,7 @@ def main() -> None:
         test_nav_bulk_upsert_uses_single_preload_and_batch_ops_for_n_le_500,
         test_nav_bulk_upsert_upsert_mode_keeps_existing_cache_values_for_none_fields,
         test_nav_bulk_upsert_updates_nav_index_cache_incrementally,
+        test_full_report_top_holdings_merge_duplicates_and_cash_mmf_bucket,
     ]
     for t in tests:
         t()
