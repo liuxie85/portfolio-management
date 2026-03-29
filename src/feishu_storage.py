@@ -15,7 +15,12 @@ from .models import (
 )
 from .snapshot_models import HoldingSnapshot
 from .feishu_client import FeishuClient
-from .local_cache import LocalPriceCache, LocalHoldingsIndexCache
+from .local_cache import (
+    LocalPriceCache,
+    LocalHoldingsIndexCache,
+    LocalNavIndexCache,
+    LocalCashFlowAggCache,
+)
 
 
 class FeishuStorage:
@@ -31,6 +36,8 @@ class FeishuStorage:
         client: FeishuClient = None,
         local_price_cache: Optional[LocalPriceCache] = None,
         local_holdings_index_cache: Optional[LocalHoldingsIndexCache] = None,
+        local_nav_index_cache: Optional[LocalNavIndexCache] = None,
+        local_cash_flow_agg_cache: Optional[LocalCashFlowAggCache] = None,
     ):
         """
         初始化飞书存储层
@@ -39,6 +46,8 @@ class FeishuStorage:
             client: FeishuClient 实例，如果不传则自动创建
             local_price_cache: 本地价格缓存实例（可注入用于测试）
             local_holdings_index_cache: 本地持仓索引缓存实例（可注入用于测试）
+            local_nav_index_cache: 本地净值索引缓存实例（可注入用于测试）
+            local_cash_flow_agg_cache: 本地现金流聚合缓存实例（可注入用于测试）
         """
         self.client = client or FeishuClient()
 
@@ -61,6 +70,17 @@ class FeishuStorage:
 
         # 本地持仓索引缓存（business_key -> fields）
         self._local_holdings_index_cache = local_holdings_index_cache or LocalHoldingsIndexCache()
+
+        # 本地 NAV 索引缓存（account -> nav index + bases）
+        self._local_nav_index_cache = local_nav_index_cache or LocalNavIndexCache()
+        self._nav_index_loaded_accounts: set[str] = set()
+        self._nav_index_mem_cache: Dict[str, Dict[str, Any]] = {}
+
+        # 本地 cash_flow 聚合缓存（account -> monthly/yearly/cumulative）
+        self._local_cash_flow_agg_cache = local_cash_flow_agg_cache or LocalCashFlowAggCache()
+        self._cash_flow_agg_loaded_accounts: set[str] = set()
+        self._cash_flow_agg_mem_cache: Dict[str, Dict[str, Any]] = {}
+
         self._load_persistent_holdings_index()
 
     def _get_holding_cache_key(self, asset_id: str, account: str, market: Optional[str]) -> str:
@@ -71,6 +91,17 @@ class FeishuStorage:
         'asset_id', 'asset_name', 'asset_type', 'account', 'market',
         'quantity', 'avg_cost', 'currency', 'asset_class', 'industry', 'tag',
         'created_at', 'updated_at'
+    ]
+
+    NAV_INDEX_PROJECTION_FIELDS: List[str] = [
+        'date', 'account', 'total_value', 'shares', 'nav',
+        'cash_flow', 'pnl', 'mtd_nav_change', 'ytd_nav_change',
+        'mtd_pnl', 'ytd_pnl', 'updated_at',
+    ]
+
+    CASH_FLOW_PROJECTION_FIELDS: List[str] = [
+        'flow_date', 'account', 'amount', 'currency', 'cny_amount',
+        'exchange_rate', 'flow_type', 'updated_at',
     ]
 
     def _snapshot_for_persistent_cache(self, holding: Holding) -> Dict[str, Any]:
@@ -565,6 +596,23 @@ class FeishuStorage:
         dt = datetime.combine(d, datetime.min.time(), tzinfo=self.FEISHU_DATE_TZ)
         return int(dt.timestamp() * 1000)
 
+    @staticmethod
+    def _safe_date_str(d: Optional[date]) -> Optional[str]:
+        if not d:
+            return None
+        return d.strftime('%Y-%m-%d')
+
+    def _extract_updated_at_str(self, fields: Dict[str, Any]) -> Optional[str]:
+        raw = fields.get('updated_at')
+        if raw is None:
+            return None
+        if isinstance(raw, (int, float)):
+            dt = datetime.fromtimestamp(raw / 1000, tz=self.FEISHU_DATE_TZ)
+            return dt.replace(tzinfo=None).strftime(DATETIME_FORMAT)
+        if isinstance(raw, str):
+            return raw
+        return None
+
     # ========== holdings 持仓操作 ==========
 
     def get_holding(self, asset_id: str, account: str, market: Optional[str] = None) -> Optional[Holding]:
@@ -891,11 +939,20 @@ class FeishuStorage:
 
     def delete_cash_flow_by_record_id(self, record_id: str) -> bool:
         """通过记录ID删除出入金"""
-        return self.client.delete_record('cash_flow', record_id)
+        ok = self.client.delete_record('cash_flow', record_id)
+        if ok:
+            # 删除/回填都可能破坏聚合正确性，直接失效对应内存加载状态
+            self._cash_flow_agg_loaded_accounts.clear()
+            self._cash_flow_agg_mem_cache.clear()
+        return ok
 
     def delete_nav_by_record_id(self, record_id: str) -> bool:
         """通过记录ID删除净值记录"""
-        return self.client.delete_record('nav_history', record_id)
+        ok = self.client.delete_record('nav_history', record_id)
+        if ok:
+            self._nav_index_loaded_accounts.clear()
+            self._nav_index_mem_cache.clear()
+        return ok
 
     def _holding_to_dict(self, holding: Holding) -> Dict:
         """Holding 转字典"""
@@ -1224,6 +1281,20 @@ class FeishuStorage:
         if cf.dedup_key:
             self._dedup_key_cache[f"cash_flow:{cf.dedup_key}"] = cf.record_id
 
+        # 增量更新本地 cash_flow 聚合缓存（若已加载该账户）
+        if cf.account in self._cash_flow_agg_loaded_accounts and cf.flow_date:
+            from .time_utils import bj_now_naive
+            cny_amount = cf.cny_amount if cf.cny_amount is not None else cf.amount
+            self._local_cash_flow_agg_cache.append_flow(
+                cf.account,
+                cf.flow_date,
+                float(cny_amount or 0.0),
+                cf.record_id,
+                bj_now_naive().strftime(DATETIME_FORMAT),
+            )
+            # 重新读取，确保内存与持久化一致
+            self._cash_flow_agg_mem_cache[cf.account] = self._local_cash_flow_agg_cache.get_account(cf.account)
+
         return cf
 
     def get_cash_flow(self, record_id: str) -> Optional[CashFlow]:
@@ -1237,16 +1308,134 @@ class FeishuStorage:
         fields['record_id'] = record['record_id']
         return self._dict_to_cash_flow(fields)
 
+    def preload_cash_flow_aggs(self, account: str, force_refresh: bool = False) -> Dict[str, Any]:
+        """预加载并缓存 cash_flow 月度/年度聚合。"""
+        if (not force_refresh) and (account in self._cash_flow_agg_loaded_accounts):
+            cached = self._cash_flow_agg_mem_cache.get(account) or {}
+            return {
+                'account': account,
+                'loaded': int(cached.get('flow_count', 0) or 0),
+                'source': 'memory',
+                'invalidated': False,
+            }
+
+        cached_local = self._local_cash_flow_agg_cache.get_account(account)
+
+        filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
+        try:
+            records = self.client.list_records(
+                'cash_flow',
+                filter_str=filter_str,
+                field_names=self.CASH_FLOW_PROJECTION_FIELDS,
+            )
+        except Exception as e:
+            if 'FieldNameNotFound' in str(e):
+                fallback_fields = [f for f in self.CASH_FLOW_PROJECTION_FIELDS if f != 'updated_at']
+                records = self.client.list_records(
+                    'cash_flow',
+                    filter_str=filter_str,
+                    field_names=fallback_fields,
+                )
+            else:
+                raise
+
+        flows: List[Dict[str, Any]] = []
+        daily: Dict[str, float] = {}
+        monthly: Dict[str, float] = {}
+        yearly: Dict[str, float] = {}
+        cumulative = Decimal('0')
+
+        for record in records:
+            fields = self._from_feishu_fields(record.get('fields') or {}, 'cash_flow')
+            cf = self._dict_to_cash_flow({**fields, 'record_id': record['record_id']})
+            if not cf.flow_date:
+                continue
+            amount = cf.cny_amount if cf.cny_amount is not None else cf.amount
+            amount_dec = self._to_decimal(amount or 0)
+            amount_float = float(amount_dec)
+
+            ds = cf.flow_date.strftime('%Y-%m-%d')
+            ym = cf.flow_date.strftime('%Y-%m')
+            yy = cf.flow_date.strftime('%Y')
+            daily[ds] = float(self._to_decimal(daily.get(ds, 0.0)) + amount_dec)
+            monthly[ym] = float(self._to_decimal(monthly.get(ym, 0.0)) + amount_dec)
+            yearly[yy] = float(self._to_decimal(yearly.get(yy, 0.0)) + amount_dec)
+            cumulative += amount_dec
+
+            flows.append({
+                'date': self._safe_date_str(cf.flow_date),
+                'record_id': record['record_id'],
+                'cny_amount': amount_float,
+                'updated_at': self._extract_updated_at_str(record.get('fields') or {}),
+            })
+
+        flows.sort(key=lambda x: x.get('date') or '')
+        last_record = dict(flows[-1]) if flows else None
+
+        invalidated = False
+        if cached_local:
+            old_fp = {r.get('date'): (r.get('record_id'), r.get('updated_at')) for r in (cached_local.get('flows') or [])}
+            new_fp = {r.get('date'): (r.get('record_id'), r.get('updated_at')) for r in flows}
+            if old_fp != new_fp:
+                invalidated = True
+
+        payload = {
+            'account': account,
+            'daily': daily,
+            'monthly': monthly,
+            'yearly': yearly,
+            'cumulative': float(cumulative),
+            'flow_count': len(flows),
+            'flows': flows,
+            'last_record': last_record,
+            'latest_updated_at': (last_record or {}).get('updated_at') if last_record else None,
+        }
+
+        self._cash_flow_agg_mem_cache[account] = payload
+        self._cash_flow_agg_loaded_accounts.add(account)
+        self._local_cash_flow_agg_cache.set_account(account, payload)
+
+        return {'account': account, 'loaded': len(flows), 'source': 'feishu', 'invalidated': invalidated}
+
+    def _ensure_cash_flow_aggs_loaded(self, account: str):
+        if account in self._cash_flow_agg_loaded_accounts:
+            return
+        cached = self._local_cash_flow_agg_cache.get_account(account)
+        if cached:
+            self._cash_flow_agg_mem_cache[account] = cached
+            self._cash_flow_agg_loaded_accounts.add(account)
+            return
+        self.preload_cash_flow_aggs(account)
+
+    def get_cash_flow_aggs(self, account: str) -> Dict[str, Any]:
+        self._ensure_cash_flow_aggs_loaded(account)
+        return self._cash_flow_agg_mem_cache.get(account) or {}
+
     def get_cash_flows(self, account: Optional[str] = None,
                       start_date: Optional[date] = None,
                       end_date: Optional[date] = None) -> List[CashFlow]:
-        """获取出入金记录列表"""
+        """获取出入金记录列表（投影字段，降低 payload）。"""
         conditions = []
 
         if account:
-            conditions.append(f'CurrentValue.[account] = "{account}"')
+            conditions.append(f'CurrentValue.[account] = "{self._escape_filter_value(account)}"')
         filter_str = ' AND '.join(conditions) if conditions else None
-        records = self.client.list_records('cash_flow', filter_str=filter_str)
+        try:
+            records = self.client.list_records(
+                'cash_flow',
+                filter_str=filter_str,
+                field_names=self.CASH_FLOW_PROJECTION_FIELDS,
+            )
+        except Exception as e:
+            if 'FieldNameNotFound' in str(e):
+                fallback_fields = [f for f in self.CASH_FLOW_PROJECTION_FIELDS if f != 'updated_at']
+                records = self.client.list_records(
+                    'cash_flow',
+                    filter_str=filter_str,
+                    field_names=fallback_fields,
+                )
+            else:
+                raise
 
         cash_flows = []
         for record in records:
@@ -1411,6 +1600,175 @@ class FeishuStorage:
 
     # ========== nav_history 净值历史操作 ==========
 
+    def _build_nav_index_payload(self, account: str, records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        navs: List[NAVHistory] = []
+        nav_records: List[Dict[str, Any]] = []
+
+        for record in records:
+            raw_fields = record.get('fields') or {}
+            fields = self._from_feishu_fields(raw_fields, 'nav_history')
+            fields['record_id'] = record['record_id']
+            nav = self._dict_to_nav(fields)
+            if not nav.date:
+                continue
+            navs.append(nav)
+            nav_records.append({
+                'date': self._safe_date_str(nav.date),
+                'record_id': nav.record_id,
+                'total_value': nav.total_value,
+                'shares': nav.shares,
+                'nav': nav.nav,
+                'cash_flow': nav.cash_flow,
+                'pnl': nav.pnl,
+                'mtd_nav_change': nav.mtd_nav_change,
+                'ytd_nav_change': nav.ytd_nav_change,
+                'mtd_pnl': nav.mtd_pnl,
+                'ytd_pnl': nav.ytd_pnl,
+                'updated_at': self._extract_updated_at_str(raw_fields),
+            })
+
+        nav_records.sort(key=lambda x: x.get('date') or '')
+        navs.sort(key=lambda x: x.date)
+
+        month_end_base: Dict[str, Dict[str, Any]] = {}
+        year_end_base: Dict[str, Dict[str, Any]] = {}
+        for row in nav_records:
+            ds = row.get('date')
+            if not ds:
+                continue
+            d = datetime.strptime(ds, '%Y-%m-%d').date()
+            month_end_base[d.strftime('%Y-%m')] = dict(row)
+            year_end_base[str(d.year)] = dict(row)
+
+        inception_base = dict(nav_records[0]) if nav_records else None
+        last_record = dict(nav_records[-1]) if nav_records else None
+
+        return {
+            'account': account,
+            'record_count': len(nav_records),
+            'nav_history': nav_records,
+            'month_end_base': month_end_base,
+            'year_end_base': year_end_base,
+            'inception_base': inception_base,
+            'last_record': last_record,
+            'latest_updated_at': (last_record or {}).get('updated_at') if last_record else None,
+            '_nav_objects': navs,
+        }
+
+    @staticmethod
+    def _nav_index_fingerprint(payload: Dict[str, Any]) -> Dict[str, tuple]:
+        fp: Dict[str, tuple] = {}
+        for row in payload.get('nav_history') or []:
+            ds = row.get('date')
+            if not ds:
+                continue
+            fp[ds] = (row.get('record_id'), row.get('updated_at'))
+        return fp
+
+    def preload_nav_index(self, account: str, force_refresh: bool = False) -> Dict[str, Any]:
+        """预加载并缓存 nav_history 索引（含 month/year/inception bases）。"""
+        if (not force_refresh) and (account in self._nav_index_loaded_accounts):
+            cached = self._nav_index_mem_cache.get(account) or {}
+            return {
+                'account': account,
+                'loaded': int(cached.get('record_count', 0) or 0),
+                'source': 'memory',
+                'invalidated': False,
+            }
+
+        cached_local = self._local_nav_index_cache.get_account(account)
+
+        filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
+        try:
+            records = self.client.list_records(
+                'nav_history',
+                filter_str=filter_str,
+                field_names=self.NAV_INDEX_PROJECTION_FIELDS,
+            )
+        except Exception as e:
+            if 'FieldNameNotFound' in str(e):
+                fallback_fields = [f for f in self.NAV_INDEX_PROJECTION_FIELDS if f != 'updated_at']
+                records = self.client.list_records(
+                    'nav_history',
+                    filter_str=filter_str,
+                    field_names=fallback_fields,
+                )
+            else:
+                raise
+
+        payload = self._build_nav_index_payload(account, records)
+        invalidated = False
+
+        if cached_local:
+            missing_base = not cached_local.get('inception_base') or not cached_local.get('month_end_base') or not cached_local.get('year_end_base')
+            if missing_base:
+                invalidated = True
+            else:
+                old_fp = self._nav_index_fingerprint(cached_local)
+                new_fp = self._nav_index_fingerprint(payload)
+                if old_fp != new_fp:
+                    invalidated = True
+
+        self._nav_index_mem_cache[account] = payload
+        self._nav_index_loaded_accounts.add(account)
+
+        persist_payload = dict(payload)
+        persist_payload.pop('_nav_objects', None)
+        self._local_nav_index_cache.set_account(account, persist_payload)
+
+        return {
+            'account': account,
+            'loaded': len(payload.get('nav_history') or []),
+            'source': 'feishu',
+            'invalidated': invalidated,
+        }
+
+    def _ensure_nav_index_loaded(self, account: str):
+        if account in self._nav_index_loaded_accounts:
+            return
+
+        cached_local = self._local_nav_index_cache.get_account(account)
+        if cached_local:
+            navs: List[NAVHistory] = []
+            for row in cached_local.get('nav_history') or []:
+                ds = row.get('date')
+                if not ds:
+                    continue
+                try:
+                    d = datetime.strptime(ds[:10], '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                navs.append(NAVHistory(
+                    record_id=row.get('record_id'),
+                    date=d,
+                    account=account,
+                    total_value=float(row.get('total_value') or 0.0),
+                    shares=float(row['shares']) if row.get('shares') is not None else None,
+                    nav=float(row['nav']) if row.get('nav') is not None else None,
+                    cash_flow=float(row['cash_flow']) if row.get('cash_flow') is not None else None,
+                    pnl=float(row['pnl']) if row.get('pnl') is not None else None,
+                    mtd_nav_change=float(row['mtd_nav_change']) if row.get('mtd_nav_change') is not None else None,
+                    ytd_nav_change=float(row['ytd_nav_change']) if row.get('ytd_nav_change') is not None else None,
+                    mtd_pnl=float(row['mtd_pnl']) if row.get('mtd_pnl') is not None else None,
+                    ytd_pnl=float(row['ytd_pnl']) if row.get('ytd_pnl') is not None else None,
+                ))
+
+            payload = dict(cached_local)
+            payload['_nav_objects'] = sorted(navs, key=lambda x: x.date)
+            self._nav_index_mem_cache[account] = payload
+            self._nav_index_loaded_accounts.add(account)
+            return
+
+        self.preload_nav_index(account)
+
+    def get_nav_index(self, account: str) -> Dict[str, Any]:
+        self._ensure_nav_index_loaded(account)
+        return self._nav_index_mem_cache.get(account) or {}
+
+    def _invalidate_nav_index(self, account: str):
+        self._nav_index_loaded_accounts.discard(account)
+        self._nav_index_mem_cache.pop(account, None)
+
     def save_nav(self, nav: NAVHistory, overwrite_existing: bool = True, dry_run: bool = False):
         """保存净值记录
 
@@ -1445,6 +1803,7 @@ class FeishuStorage:
             else:
                 result = self.client.create_record('nav_history', feishu_fields)
                 nav.record_id = result['record_id']
+            self._invalidate_nav_index(nav.account)
             return
         except Exception as e:
             msg = str(e)
@@ -1462,63 +1821,43 @@ class FeishuStorage:
         else:
             result = self.client.create_record('nav_history', fallback_fields)
             nav.record_id = result['record_id']
+        self._invalidate_nav_index(nav.account)
 
     def get_nav_history(self, account: str, days: int = 365) -> List[NAVHistory]:
-        """获取净值历史"""
+        """获取净值历史（优先本地预加载索引）。"""
         from datetime import timedelta
         from .time_utils import bj_today
         start_date = bj_today() - timedelta(days=days)
 
-        # 飞书日期字段不支持 >=/<= 比较操作符，只用 account 过滤，日期在客户端筛选
-        filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
-        records = self.client.list_records('nav_history', filter_str=filter_str)
+        self.preload_nav_index(account)
+        idx = self.get_nav_index(account)
+        navs: List[NAVHistory] = list(idx.get('_nav_objects') or [])
+        if not navs:
+            # 兜底：如果缓存不可用，直接走一次 preload
+            self.preload_nav_index(account, force_refresh=True)
+            idx = self.get_nav_index(account)
+            navs = list(idx.get('_nav_objects') or [])
 
-        navs = []
-        for record in records:
-            fields = self._from_feishu_fields(record['fields'], 'nav_history')
-            fields['record_id'] = record['record_id']
-            nav = self._dict_to_nav(fields)
-            if nav.date and nav.date >= start_date:
-                navs.append(nav)
-
-        navs.sort(key=lambda n: n.date)
-        return navs
+        filtered = [n for n in navs if n.date and n.date >= start_date]
+        filtered.sort(key=lambda n: n.date)
+        return filtered
 
     def get_latest_nav(self, account: str) -> Optional[NAVHistory]:
-        """获取最新净值记录"""
-        filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
-        records = self.client.list_records('nav_history', filter_str=filter_str)
-
-        if not records:
-            return None
-
-        # 按日期排序取最新
-        navs = []
-        for record in records:
-            fields = self._from_feishu_fields(record['fields'], 'nav_history')
-            fields['record_id'] = record['record_id']
-            navs.append(self._dict_to_nav(fields))
-
-        navs.sort(key=lambda n: n.date, reverse=True)
-        return navs[0] if navs else None
+        """获取最新净值记录（优先索引）。"""
+        idx = self.get_nav_index(account)
+        navs = idx.get('_nav_objects') or []
+        return navs[-1] if navs else None
 
     def get_nav_on_date(self, account: str, nav_date: date) -> Optional[NAVHistory]:
-        """获取指定日期的净值记录（按纯日期匹配）"""
+        """获取指定日期的净值记录（按纯日期匹配，优先索引）。"""
         if isinstance(nav_date, datetime):
             nav_date = nav_date.date()
         elif isinstance(nav_date, str):
             nav_date = datetime.strptime(nav_date[:10], '%Y-%m-%d').date()
 
-        filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
-        records = self.client.list_records('nav_history', filter_str=filter_str)
-
-        matches = []
-        for record in records:
-            fields = self._from_feishu_fields(record['fields'], 'nav_history')
-            fields['record_id'] = record['record_id']
-            nav = self._dict_to_nav(fields)
-            if nav.date == nav_date:
-                matches.append(nav)
+        idx = self.get_nav_index(account)
+        navs = idx.get('_nav_objects') or []
+        matches = [n for n in navs if n.date == nav_date]
 
         if len(matches) > 1:
             print(f"[警告] nav_history 存在重复日期记录: account={account}, date={nav_date}, count={len(matches)}")
@@ -1556,27 +1895,16 @@ class FeishuStorage:
         if dry_run:
             return {"record_id": record_id, "fields": feishu_fields}
         self.client.update_record('nav_history', record_id, feishu_fields)
+        self._nav_index_loaded_accounts.clear()
+        self._nav_index_mem_cache.clear()
         return {"record_id": record_id, "fields": feishu_fields}
 
     def get_latest_nav_before(self, account: str, before_date: date) -> Optional[NAVHistory]:
-        """获取指定日期之前的最新净值记录"""
-        # 飞书日期字段不支持比较操作符，获取全部后客户端筛选
-        filter_str = f'CurrentValue.[account] = "{self._escape_filter_value(account)}"'
-        records = self.client.list_records('nav_history', filter_str=filter_str)
-
-        if not records:
-            return None
-
-        navs = []
-        for record in records:
-            fields = self._from_feishu_fields(record['fields'], 'nav_history')
-            fields['record_id'] = record['record_id']
-            nav = self._dict_to_nav(fields)
-            if nav.date and nav.date < before_date:
-                navs.append(nav)
-
-        navs.sort(key=lambda n: n.date, reverse=True)
-        return navs[0] if navs else None
+        """获取指定日期之前的最新净值记录（优先索引）。"""
+        navs = self.get_nav_index(account).get('_nav_objects') or []
+        candidates = [n for n in navs if n.date and n.date < before_date]
+        candidates.sort(key=lambda n: n.date, reverse=True)
+        return candidates[0] if candidates else None
 
     def get_total_shares(self, account: str) -> float:
         """获取账户总份额"""

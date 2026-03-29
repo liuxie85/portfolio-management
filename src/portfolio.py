@@ -749,11 +749,13 @@ class PortfolioManager:
         stock_ratio = stock_value / total_value if total_value > 0 else 0
         cash_ratio = cash_value / total_value if total_value > 0 else 0
 
-        # ===== 3. 获取历史数据（单次 API 调用获取全部 NAV）=====
-        all_navs = self.storage.get_nav_history(account, days=9999)
+        # ===== 3. 获取历史数据（预加载 NAV 索引，避免重复全表扫描）=====
+        self.storage.preload_nav_index(account)
+        nav_idx_payload = self.storage.get_nav_index(account)
+        all_navs = list(nav_idx_payload.get('_nav_objects') or [])
         nav_index = self._build_nav_lookup(all_navs)
 
-        # 从全量数据中提取各细分查询结果，避免重复扫描
+        # 从索引中提取各细分查询结果
         yesterday_nav = self._find_latest_nav_before(all_navs, today, nav_index=nav_index)
         prev_year_end_nav = self._find_year_end_nav(all_navs, str(today.year - 1), nav_index=nav_index)
         prev_month_end_nav = self._find_prev_month_end_nav(all_navs, today.year, today.month, nav_index=nav_index)
@@ -1273,77 +1275,87 @@ class PortfolioManager:
         return float(total)
 
     def _summarize_cash_flows(self, account: str, today: date, start_year: int, last_nav=None) -> dict:
-        """一次查询覆盖 record_nav 所需的资金变动口径，并在内存中汇总。"""
-        start_date = date(start_year, 1, 1)
-        flows = self.storage.get_cash_flows(account, start_date, today)
+        """使用预加载聚合缓存计算资金变动口径。"""
+        self.storage.preload_cash_flow_aggs(account)
+        agg = self.storage.get_cash_flow_aggs(account)
 
-        daily = Decimal('0')
-        monthly = Decimal('0')
+        daily_map = agg.get('daily') or {}
+        monthly_map = agg.get('monthly') or {}
+        yearly_map = agg.get('yearly') or {}
+
+        daily = self._to_decimal(daily_map.get(today.strftime('%Y-%m-%d'), 0.0))
+        monthly = self._to_decimal(monthly_map.get(today.strftime('%Y-%m'), 0.0))
+
+        yearly = {}
+        for yr in range(start_year, today.year + 1):
+            yr_str = str(yr)
+            yearly[yr_str] = float(self._to_decimal(yearly_map.get(yr_str, 0.0)))
+
         cumulative = Decimal('0')
-        yearly = {str(yr): Decimal('0') for yr in range(start_year, today.year + 1)}
+        for day_str, amount in daily_map.items():
+            try:
+                d = datetime.strptime(day_str[:10], '%Y-%m-%d').date()
+            except Exception:
+                continue
+            if d >= date(start_year, 1, 1) and d <= today:
+                cumulative += self._to_decimal(amount)
+
         gap = Decimal('0')
         gap_start = last_nav.date if last_nav else None
-
-        for flow in flows:
-            amount = flow.cny_amount
-            if not amount:
+        for day_str, amount in daily_map.items():
+            try:
+                d = datetime.strptime(day_str[:10], '%Y-%m-%d').date()
+            except Exception:
                 continue
-            amount_dec = self._to_decimal(amount)
-            flow_day = flow.flow_date
-            cumulative += amount_dec
-
-            if flow_day == today:
-                daily += amount_dec
-            if flow_day.year == today.year and flow_day.month == today.month:
-                monthly += amount_dec
-
-            flow_year = str(flow_day.year)
-            if flow_year in yearly:
-                yearly[flow_year] += amount_dec
-
+            if d > today:
+                continue
             if gap_start is None:
-                if flow_day == today:
-                    gap += amount_dec
-            elif flow_day > gap_start:
-                gap += amount_dec
+                if d == today:
+                    gap += self._to_decimal(amount)
+            elif d > gap_start:
+                gap += self._to_decimal(amount)
 
         return {
             'daily': float(daily),
             'monthly': float(monthly),
-            'yearly': {k: float(v) for k, v in yearly.items()},
+            'yearly': yearly,
             'cumulative': float(cumulative),
             'gap': float(gap),
         }
 
     def _get_daily_cash_flow(self, account: str, flow_date: date) -> float:
-        """获取当日资金变动（从cash_flow表）"""
-        flows = self.storage.get_cash_flows(account, flow_date, flow_date)
-        return self._sum_cash_flows(flows)
+        """获取当日资金变动（优先聚合缓存）。"""
+        self.storage.preload_cash_flow_aggs(account)
+        agg = self.storage.get_cash_flow_aggs(account)
+        return float(self._to_decimal((agg.get('daily') or {}).get(flow_date.strftime('%Y-%m-%d'), 0.0)))
 
     def _get_yearly_cash_flow(self, account: str, year: str) -> float:
-        """获取当年累计资金变动"""
-        year_start = date(int(year), 1, 1)
-        year_end = date(int(year), 12, 31)
-
-        flows = self.storage.get_cash_flows(account, year_start, year_end)
-        return self._sum_cash_flows(flows)
+        """获取当年累计资金变动（优先聚合缓存）。"""
+        self.storage.preload_cash_flow_aggs(account)
+        agg = self.storage.get_cash_flow_aggs(account)
+        return float(self._to_decimal((agg.get('yearly') or {}).get(str(year), 0.0)))
 
     def _get_monthly_cash_flow(self, account: str, year: int, month: int) -> float:
-        """获取当月累计资金变动"""
-        month_start = date(year, month, 1)
-        if month == 12:
-            month_end = date(year, 12, 31)
-        else:
-            month_end = date(year, month + 1, 1)
-            from datetime import timedelta
-            month_end = month_end - timedelta(days=1)
-        flows = self.storage.get_cash_flows(account, month_start, month_end)
-        return self._sum_cash_flows(flows)
+        """获取当月累计资金变动（优先聚合缓存）。"""
+        self.storage.preload_cash_flow_aggs(account)
+        agg = self.storage.get_cash_flow_aggs(account)
+        return float(self._to_decimal((agg.get('monthly') or {}).get(f"{year:04d}-{month:02d}", 0.0)))
 
     def _get_period_cash_flow(self, account: str, start_date: date, end_date: date) -> float:
-        """获取指定期间的累计资金变动"""
-        flows = self.storage.get_cash_flows(account, start_date, end_date)
-        return self._sum_cash_flows(flows)
+        """获取指定期间的累计资金变动（基于日聚合缓存）。"""
+        self.storage.preload_cash_flow_aggs(account)
+        agg = self.storage.get_cash_flow_aggs(account)
+        daily = agg.get('daily') or {}
+        total = Decimal('0')
+        for ds, amount in daily.items():
+            try:
+                d = datetime.strptime(ds[:10], '%Y-%m-%d').date()
+            except Exception:
+                continue
+            if d < start_date or d > end_date:
+                continue
+            total += self._to_decimal(amount)
+        return float(total)
 
     def _get_initial_value(self, account: str, all_navs: list = None) -> Optional[float]:
         """获取初始账户净值（净值=1时的初始值）
@@ -1432,11 +1444,8 @@ class PortfolioManager:
         return max(prev_month_navs, key=lambda n: n.date) if prev_month_navs else None
 
     def _get_cumulative_cash_flow_from_year(self, account: str, from_year: str, to_date: date) -> float:
-        """获取从某年开始到指定日期的累计资金变动"""
-        year_start = date(int(from_year), 1, 1)
-
-        flows = self.storage.get_cash_flows(account, year_start, to_date)
-        return sum(f.cny_amount for f in flows if f.cny_amount)
+        """获取从某年开始到指定日期的累计资金变动（基于聚合缓存）。"""
+        return self._get_period_cash_flow(account, date(int(from_year), 1, 1), to_date)
 
     # ========== 份额管理 ==========
 

@@ -7,7 +7,7 @@
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 
 from .time_utils import bj_now_naive
 from pathlib import Path
@@ -397,6 +397,312 @@ class LocalHoldingsIndexCache:
             if cache_key not in self._cache:
                 return
             self._cache.pop(cache_key, None)
+            self._dirty_count += 1
+            self._dirty_flag = True
+            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+                self._save_unlocked()
+            else:
+                self._schedule_flush()
+
+
+# 默认净值索引缓存文件路径
+NAV_INDEX_FILE = Path(__file__).parent.parent / '.data' / 'nav_index_cache.json'
+
+
+class LocalNavIndexCache:
+    """本地 NAV 索引缓存。
+
+    按 account 存储：
+    - nav_history 轻量投影（用于快速回放）
+    - month_end_base / year_end_base / inception_base
+    - last_record
+    """
+
+    VERSION = 1
+
+    def __init__(self, cache_file: Path = NAV_INDEX_FILE):
+        self.cache_file = cache_file
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._dirty_count = 0
+        self._dirty_flag = False
+        self._flush_timer: Optional[threading.Timer] = None
+        self._shutdown = False
+        self._load()
+
+    def _load_unlocked(self):
+        try:
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get('accounts'), dict):
+                self._cache = data['accounts']
+            elif isinstance(data, dict):
+                self._cache = data
+            else:
+                self._cache = {}
+        except FileNotFoundError:
+            self._cache = {}
+        except (json.JSONDecodeError, IOError):
+            self._cache = {}
+
+    def _load(self):
+        with self._lock:
+            self._load_unlocked()
+
+    def _save_unlocked(self):
+        try:
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                'version': self.VERSION,
+                'saved_at': bj_now_naive().strftime(DATETIME_FORMAT),
+                'accounts': self._cache,
+            }
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self._dirty_count = 0
+            self._dirty_flag = False
+        except IOError as e:
+            print(f"[警告] 保存本地 NAV 索引缓存失败: {e}")
+
+    def _schedule_flush(self):
+        if self._shutdown:
+            return
+        if self._flush_timer is None or not self._flush_timer.is_alive():
+            self._flush_timer = threading.Timer(FLUSH_INTERVAL_SECONDS, self._flush_delayed)
+            self._flush_timer.daemon = True
+            self._flush_timer.start()
+
+    def _flush_delayed(self):
+        with self._lock:
+            if self._dirty_flag:
+                self._save_unlocked()
+            self._flush_timer = None
+
+    def flush(self):
+        with self._lock:
+            if self._dirty_flag:
+                self._save_unlocked()
+            if self._flush_timer and self._flush_timer.is_alive():
+                self._flush_timer.cancel()
+                self._flush_timer = None
+
+    def close(self):
+        self._shutdown = True
+        self.flush()
+
+    def __del__(self):
+        self.close()
+
+    @staticmethod
+    def _parse_date(s: Any) -> Optional[date]:
+        if not s or not isinstance(s, str):
+            return None
+        try:
+            return datetime.strptime(s[:10], '%Y-%m-%d').date()
+        except Exception:
+            return None
+
+    def get_account(self, account: str) -> Dict[str, Any]:
+        with self._lock:
+            data = self._cache.get(account)
+            if not isinstance(data, dict):
+                return {}
+            return json.loads(json.dumps(data))
+
+    def set_account(self, account: str, payload: Dict[str, Any], *, _flush: bool = False):
+        with self._lock:
+            self._cache[account] = json.loads(json.dumps(payload))
+            self._dirty_count += 1
+            self._dirty_flag = True
+            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+                self._save_unlocked()
+            else:
+                self._schedule_flush()
+
+    def update_account(self, account: str, patch: Dict[str, Any], *, _flush: bool = False):
+        with self._lock:
+            base = self._cache.get(account) if isinstance(self._cache.get(account), dict) else {}
+            base = dict(base)
+            base.update(json.loads(json.dumps(patch)))
+            self._cache[account] = base
+            self._dirty_count += 1
+            self._dirty_flag = True
+            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+                self._save_unlocked()
+            else:
+                self._schedule_flush()
+
+    def append_nav_record(self, account: str, record: Dict[str, Any], *, _flush: bool = False):
+        with self._lock:
+            base = self._cache.get(account) if isinstance(self._cache.get(account), dict) else {}
+            base = dict(base)
+            navs = list(base.get('nav_history') or [])
+            navs.append(dict(record))
+            navs.sort(key=lambda r: r.get('date') or '')
+
+            month_end_base: Dict[str, Dict[str, Any]] = {}
+            year_end_base: Dict[str, Dict[str, Any]] = {}
+            for r in navs:
+                d = self._parse_date(r.get('date'))
+                if not d:
+                    continue
+                month_end_base[d.strftime('%Y-%m')] = dict(r)
+                year_end_base[str(d.year)] = dict(r)
+
+            inception_base = dict(navs[0]) if navs else None
+            last_record = dict(navs[-1]) if navs else None
+
+            base['nav_history'] = navs
+            base['month_end_base'] = month_end_base
+            base['year_end_base'] = year_end_base
+            base['inception_base'] = inception_base
+            base['last_record'] = last_record
+            base['record_count'] = len(navs)
+            if last_record:
+                base['latest_updated_at'] = last_record.get('updated_at')
+
+            self._cache[account] = base
+            self._dirty_count += 1
+            self._dirty_flag = True
+            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+                self._save_unlocked()
+            else:
+                self._schedule_flush()
+
+
+# 默认现金流聚合缓存文件路径
+CASH_FLOW_AGG_FILE = Path(__file__).parent.parent / '.data' / 'cash_flow_agg_cache.json'
+
+
+class LocalCashFlowAggCache:
+    """本地现金流聚合缓存。
+
+    按 account 存储：
+    - monthly: YYYY-MM -> sum(cny_amount)
+    - yearly: YYYY -> sum(cny_amount)
+    - cumulative / last_record / flow_count
+    """
+
+    VERSION = 1
+
+    def __init__(self, cache_file: Path = CASH_FLOW_AGG_FILE):
+        self.cache_file = cache_file
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._dirty_count = 0
+        self._dirty_flag = False
+        self._flush_timer: Optional[threading.Timer] = None
+        self._shutdown = False
+        self._load()
+
+    def _load_unlocked(self):
+        try:
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get('accounts'), dict):
+                self._cache = data['accounts']
+            elif isinstance(data, dict):
+                self._cache = data
+            else:
+                self._cache = {}
+        except FileNotFoundError:
+            self._cache = {}
+        except (json.JSONDecodeError, IOError):
+            self._cache = {}
+
+    def _load(self):
+        with self._lock:
+            self._load_unlocked()
+
+    def _save_unlocked(self):
+        try:
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                'version': self.VERSION,
+                'saved_at': bj_now_naive().strftime(DATETIME_FORMAT),
+                'accounts': self._cache,
+            }
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self._dirty_count = 0
+            self._dirty_flag = False
+        except IOError as e:
+            print(f"[警告] 保存本地现金流聚合缓存失败: {e}")
+
+    def _schedule_flush(self):
+        if self._shutdown:
+            return
+        if self._flush_timer is None or not self._flush_timer.is_alive():
+            self._flush_timer = threading.Timer(FLUSH_INTERVAL_SECONDS, self._flush_delayed)
+            self._flush_timer.daemon = True
+            self._flush_timer.start()
+
+    def _flush_delayed(self):
+        with self._lock:
+            if self._dirty_flag:
+                self._save_unlocked()
+            self._flush_timer = None
+
+    def flush(self):
+        with self._lock:
+            if self._dirty_flag:
+                self._save_unlocked()
+            if self._flush_timer and self._flush_timer.is_alive():
+                self._flush_timer.cancel()
+                self._flush_timer = None
+
+    def close(self):
+        self._shutdown = True
+        self.flush()
+
+    def __del__(self):
+        self.close()
+
+    def get_account(self, account: str) -> Dict[str, Any]:
+        with self._lock:
+            data = self._cache.get(account)
+            if not isinstance(data, dict):
+                return {}
+            return json.loads(json.dumps(data))
+
+    def set_account(self, account: str, payload: Dict[str, Any], *, _flush: bool = False):
+        with self._lock:
+            self._cache[account] = json.loads(json.dumps(payload))
+            self._dirty_count += 1
+            self._dirty_flag = True
+            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+                self._save_unlocked()
+            else:
+                self._schedule_flush()
+
+    def append_flow(self, account: str, flow_date: date, cny_amount: float, record_id: Optional[str], updated_at: Optional[str], *, _flush: bool = False):
+        with self._lock:
+            base = self._cache.get(account) if isinstance(self._cache.get(account), dict) else {}
+            base = dict(base)
+            daily = dict(base.get('daily') or {})
+            monthly = dict(base.get('monthly') or {})
+            yearly = dict(base.get('yearly') or {})
+
+            ds = flow_date.strftime('%Y-%m-%d')
+            ym = flow_date.strftime('%Y-%m')
+            yy = flow_date.strftime('%Y')
+            daily[ds] = float(daily.get(ds, 0.0) + (cny_amount or 0.0))
+            monthly[ym] = float(monthly.get(ym, 0.0) + (cny_amount or 0.0))
+            yearly[yy] = float(yearly.get(yy, 0.0) + (cny_amount or 0.0))
+
+            base['daily'] = daily
+            base['monthly'] = monthly
+            base['yearly'] = yearly
+            base['cumulative'] = float(base.get('cumulative', 0.0) + (cny_amount or 0.0))
+            base['flow_count'] = int(base.get('flow_count', 0)) + 1
+            base['last_record'] = {
+                'date': flow_date.strftime('%Y-%m-%d'),
+                'record_id': record_id,
+                'updated_at': updated_at,
+                'cny_amount': cny_amount,
+            }
+
+            self._cache[account] = base
             self._dirty_count += 1
             self._dirty_flag = True
             if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
