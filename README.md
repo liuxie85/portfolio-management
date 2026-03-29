@@ -84,6 +84,30 @@ buy("600519", "贵州茅台", 100, 1800)
 get_holdings(include_price=True)
 ```
 
+## HTML 日报发布（OpenClaw Publish Domain）
+
+本项目支持生成一份 **GitHub 风格**的 HTML 日报，并发布到 OpenClaw 的对外域名（本实例形如 `https://openclaw-pub-<instance>.imlgz.com/`）。
+
+### 生成并发布
+
+```bash
+cd /home/node/.openclaw/workspace/portfolio-management
+
+# 生成 HTML（写到 ./public/index.html）
+./.venv/bin/python scripts/generate_daily_report_html.py
+
+# 复制到 OpenClaw 发布根目录（/home/node/.openclaw/workspace/published/portfolio-management/index.html）
+./.venv/bin/python scripts/publish_daily_report_html_to_openclaw_pub.py
+```
+
+### 访问
+
+发布成功后可访问：
+
+- `https://openclaw-pub-<instance>.imlgz.com/portfolio-management/`
+
+> 说明：本实例的 publish-server 运行在容器内 3000 端口，并以 `/home/node/.openclaw/workspace/published` 作为静态根目录。
+
 ## 文件结构
 
 ```
