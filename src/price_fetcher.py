@@ -124,16 +124,34 @@ class PriceFetcher:
         # last-batch meta for observability
         self._last_tencent_batch_meta = None
 
-    def fetch(self, code: str, asset_name: str = None, force_refresh: bool = False) -> Optional[Dict]:
-        # NOTE: keep local vars so code shared with fetch_batch edits doesn't break.
-        asset_type_map = None
-        market_closed_ttl_multiplier = 1.0
-        """获取资产价格 (带缓存)
+    def fetch(
+        self,
+        code: str,
+        asset_name: str = None,
+        force_refresh: bool = False,
+        *,
+        asset_type_map: Dict[str, Any] = None,
+        market_closed_ttl_multiplier: float = 1.0,
+        accept_stale_when_closed: bool = False,
+        max_stale_after_expiry_sec: int = 0,
+        use_cache_only: bool = False,
+    ) -> Optional[Dict]:
+        """获取单个资产价格（带缓存）。
+
+        约定：
+        - 未过期缓存：直接返回（不触发 realtime 请求）
+        - 过期缓存：默认不返回；若 accept_stale_when_closed=True，则在 max_stale_after_expiry_sec 窗口内可作为 fallback
+        - use_cache_only=True：仅使用缓存（包括允许窗口内的过期缓存），不触发 realtime
 
         Args:
             code: 资产代码
             asset_name: 资产名称（用于辅助判断）
-            force_refresh: 强制刷新缓存
+            force_refresh: True 时跳过缓存，强制 realtime
+            asset_type_map: 可选 {code -> AssetType}，用于更准确的 market_type/TTL 计算
+            market_closed_ttl_multiplier: TTL 乘数（如非交易时段延长）
+            accept_stale_when_closed: 是否允许在缓存过期后仍读取（通常用于市场关闭时的“稳定优先”）
+            max_stale_after_expiry_sec: 允许过期后最多多少秒仍可返回
+            use_cache_only: 仅使用缓存，不请求实时价格（用于超时 fallback）
         """
         code = code.upper().strip()
         asset_name = (asset_name or '').strip()
@@ -145,49 +163,72 @@ class PriceFetcher:
         if code.endswith('-MMF'):
             return self._get_mmf_price(code)
 
-        # 检查缓存（未过期才直接返回；过期则尝试实时刷新）
+        expired_cache_payload: Optional[Dict] = None
+
+        # 1) 缓存命中（优先返回未过期缓存；过期缓存作为 fallback）
         if self.use_cache and not force_refresh:
-            from .models import PriceCache
-            cached = self.storage.get_price(code, allow_expired=accept_stale_when_closed, max_stale_after_expiry_sec=max_stale_after_expiry_sec)
+            cached = self.storage.get_price(
+                code,
+                allow_expired=accept_stale_when_closed,
+                max_stale_after_expiry_sec=max_stale_after_expiry_sec,
+            )
             if cached:
-                is_expired = True
+                is_expired = False
                 if cached.expires_at:
                     try:
-                        expire_dt = datetime.fromisoformat(cached.expires_at.replace('Z', '+00:00')) if isinstance(cached.expires_at, str) else cached.expires_at
+                        expire_dt = (
+                            datetime.fromisoformat(cached.expires_at.replace('Z', '+00:00'))
+                            if isinstance(cached.expires_at, str)
+                            else cached.expires_at
+                        )
                         is_expired = expire_dt <= bj_now_naive()
                     except Exception:
-                        pass
+                        # 保守：解析失败视为过期
+                        is_expired = True
+
+                payload = self._normalize_price_payload({
+                    'code': cached.asset_id,
+                    'name': cached.asset_name,
+                    'price': cached.price,
+                    'currency': cached.currency,
+                    'cny_price': cached.cny_price,
+                    'change': cached.change,
+                    'change_pct': cached.change_pct,
+                    'exchange_rate': cached.exchange_rate,
+                    'source': cached.data_source or 'cache',
+                    'expires_at': cached.expires_at,
+                    'is_from_cache': True,
+                    'is_stale': bool(is_expired),
+                })
 
                 if not is_expired:
-                    return self._normalize_price_payload({
-                        'code': cached.asset_id,
-                        'name': cached.asset_name,
-                        'price': cached.price,
-                        'currency': cached.currency,
-                        'cny_price': cached.cny_price,
-                        'change': cached.change,
-                        'change_pct': cached.change_pct,
-                        'exchange_rate': cached.exchange_rate,
-                        'source': cached.data_source or 'cache',
-                        'expires_at': cached.expires_at,
-                        'is_stale': False,
-                        'is_from_cache': True,
-                    })
+                    return payload
 
-        # 获取实时价格
+                # expired but allowed: keep as fallback
+                if accept_stale_when_closed:
+                    payload['source'] = 'cache_fallback'
+                    expired_cache_payload = payload
+
+        # 仅用缓存：命中则返回（未命中则 None）
+        if use_cache_only:
+            return expired_cache_payload
+
+        # 2) realtime 获取
         result = self._fetch_realtime(code, asset_name)
         if result:
             result = self._normalize_price_payload(result)
 
-        # 写入缓存
+        # realtime 失败：允许使用过期缓存 fallback
+        if not result and expired_cache_payload is not None:
+            return expired_cache_payload
+
+        # 3) 写入缓存
         if result and self.use_cache:
             from .models import PriceCache, AssetType
-            from datetime import datetime, timedelta
 
             market_type = _detect_market_type_func(code)
             # Prefer holdings-provided asset_type when available to avoid market mis-detection.
             if asset_type_map is not None and code in asset_type_map:
-                from .models import AssetType
                 at = asset_type_map.get(code)
                 atv = at.value if hasattr(at, 'value') else str(at)
                 if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
@@ -198,9 +239,8 @@ class PriceFetcher:
                     market_type = 'us'
                 elif atv in (AssetType.FUND.value,):
                     market_type = 'fund'
-            ttl = int(MarketTimeUtil.get_cache_ttl(market_type) * market_closed_ttl_multiplier)
 
-            # 计算过期时间（北京时间 naive）
+            ttl = int(MarketTimeUtil.get_cache_ttl(market_type) * market_closed_ttl_multiplier)
             expires_at = bj_now_naive() + timedelta(seconds=ttl)
 
             # 检测资产类型（用于 price_cache 记录；不影响 holdings 的 asset_type）
@@ -225,7 +265,7 @@ class PriceFetcher:
                 change_pct=result.get('change_pct'),
                 exchange_rate=result.get('exchange_rate'),
                 data_source=result.get('source'),
-                expires_at=expires_at
+                expires_at=expires_at,
             )
             self.storage.save_price(price_cache)
             result['market_type'] = market_type
