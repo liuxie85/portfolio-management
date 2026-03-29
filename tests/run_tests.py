@@ -58,6 +58,10 @@ def main() -> None:
         test_upsert_uses_preloaded_cache_for_batch_updates,
         test_upsert_create_after_preload_missing_key_without_refetch,
     )
+    from tests.test_holdings_bulk_upsert_minimal import (
+        test_bulk_upsert_additive_preloads_once_per_account_and_batches_updates,
+        test_bulk_upsert_replace_mixed_update_create_updates_caches,
+    )
 
     tests = [
         test_currency_from_us_ticker_suffix,
@@ -69,6 +73,8 @@ def main() -> None:
         test_preload_builds_index_and_projection_and_avoids_refetch,
         test_upsert_uses_preloaded_cache_for_batch_updates,
         test_upsert_create_after_preload_missing_key_without_refetch,
+        test_bulk_upsert_additive_preloads_once_per_account_and_batches_updates,
+        test_bulk_upsert_replace_mixed_update_create_updates_caches,
     ]
     for t in tests:
         t()

@@ -11,7 +11,7 @@ from datetime import datetime
 
 from .time_utils import bj_now_naive
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .models import AssetType, PriceCache, DATETIME_FORMAT
 
@@ -276,3 +276,130 @@ class LocalPriceCache:
                 self._dirty_flag = True
                 self._save_unlocked()
                 print(f"[本地缓存] 清理 {len(expired_ids)} 条过期价格缓存")
+
+
+# 默认持仓索引缓存文件路径
+HOLDINGS_INDEX_FILE = Path(__file__).parent.parent / '.data' / 'holdings_index.json'
+
+
+class LocalHoldingsIndexCache:
+    """本地持仓索引缓存（business_key -> fields snapshot）
+
+    存储结构：
+    {
+      "version": 1,
+      "items": {
+        "asset:account:market": {
+          "record_id": "rec_xxx",
+          "quantity": 100,
+          "asset_type": "a_stock",
+          "asset_name": "平安银行",
+          "currency": "CNY",
+          "avg_cost": 12.3,
+          "updated_at": "2026-03-29 12:00:00"
+        }
+      }
+    }
+    """
+
+    VERSION = 1
+
+    def __init__(self, cache_file: Path = HOLDINGS_INDEX_FILE):
+        self.cache_file = cache_file
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._dirty_count = 0
+        self._dirty_flag = False
+        self._flush_timer: Optional[threading.Timer] = None
+        self._shutdown = False
+        self._load()
+
+    def _load_unlocked(self):
+        try:
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get('items'), dict):
+                self._cache = data['items']
+            elif isinstance(data, dict):
+                # 兼容旧格式：直接是 key->item
+                self._cache = data
+            else:
+                self._cache = {}
+        except FileNotFoundError:
+            self._cache = {}
+        except (json.JSONDecodeError, IOError):
+            self._cache = {}
+
+    def _load(self):
+        with self._lock:
+            self._load_unlocked()
+
+    def _save_unlocked(self):
+        try:
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                'version': self.VERSION,
+                'saved_at': bj_now_naive().strftime(DATETIME_FORMAT),
+                'items': self._cache,
+            }
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self._dirty_count = 0
+            self._dirty_flag = False
+        except IOError as e:
+            print(f"[警告] 保存本地持仓索引缓存失败: {e}")
+
+    def _schedule_flush(self):
+        if self._shutdown:
+            return
+        if self._flush_timer is None or not self._flush_timer.is_alive():
+            self._flush_timer = threading.Timer(FLUSH_INTERVAL_SECONDS, self._flush_delayed)
+            self._flush_timer.daemon = True
+            self._flush_timer.start()
+
+    def _flush_delayed(self):
+        with self._lock:
+            if self._dirty_flag:
+                self._save_unlocked()
+            self._flush_timer = None
+
+    def flush(self):
+        with self._lock:
+            if self._dirty_flag:
+                self._save_unlocked()
+            if self._flush_timer and self._flush_timer.is_alive():
+                self._flush_timer.cancel()
+                self._flush_timer = None
+
+    def close(self):
+        self._shutdown = True
+        self.flush()
+
+    def __del__(self):
+        self.close()
+
+    def load_all(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            return {k: dict(v) for k, v in self._cache.items()}
+
+    def upsert(self, cache_key: str, payload: Dict[str, Any], *, _flush: bool = False):
+        with self._lock:
+            self._cache[cache_key] = dict(payload)
+            self._dirty_count += 1
+            self._dirty_flag = True
+            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+                self._save_unlocked()
+            else:
+                self._schedule_flush()
+
+    def delete(self, cache_key: str, *, _flush: bool = False):
+        with self._lock:
+            if cache_key not in self._cache:
+                return
+            self._cache.pop(cache_key, None)
+            self._dirty_count += 1
+            self._dirty_flag = True
+            if _flush or self._dirty_count >= FLUSH_MAX_DIRTY_COUNT:
+                self._save_unlocked()
+            else:
+                self._schedule_flush()
