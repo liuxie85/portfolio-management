@@ -1802,6 +1802,10 @@ class FeishuStorage:
     def save_nav(self, nav: NAVHistory, overwrite_existing: bool = True, dry_run: bool = False):
         """保存净值记录
 
+        字段校验（IO 稳定性）：
+        - 严格区分 missing vs 0。
+        - 写入前对 nav_history 的关键字段做 fail-fast 校验，避免把脏数据写入历史。
+
         兼容不同 nav_history 表结构：若目标表缺少部分扩展字段（如 details），
         在首次写入失败时自动剔除未知字段并重试。
         写入前强制将日期标准化为纯 date，避免时分秒/时区导致的重复问题。
@@ -1811,6 +1815,59 @@ class FeishuStorage:
             dry_run: 仅演练，不实际写入
         """
         nav.date = self._normalize_nav_date(nav.date)
+
+        # ---- nav_history write validation (fail-fast) ----
+        # Required: business key + total_value
+        if not getattr(nav, 'account', None):
+            raise ValueError('nav_history write validation failed: account is required')
+        if not getattr(nav, 'date', None):
+            raise ValueError('nav_history write validation failed: date is required')
+
+        # total_value is required and must be > 0
+        if nav.total_value is None:
+            raise ValueError('nav_history write validation failed: total_value is required')
+        try:
+            tv = float(nav.total_value)
+        except Exception:
+            raise ValueError('nav_history write validation failed: total_value must be a number')
+        if tv <= 0:
+            raise ValueError('nav_history write validation failed: total_value must be > 0')
+
+        # shares/nav must be present and >0 for normal records; allow explicit CLOSED semantics
+        details = getattr(nav, 'details', None)
+        status = None
+        if isinstance(details, dict):
+            status = (details.get('status') or '').upper()
+
+        if status == 'CLOSED':
+            if nav.shares is None:
+                raise ValueError('nav_history write validation failed: shares is required when status=CLOSED')
+            try:
+                if float(nav.shares) != 0.0:
+                    raise ValueError('nav_history write validation failed: shares must be 0 when status=CLOSED')
+            except ValueError:
+                raise
+            except Exception:
+                raise ValueError('nav_history write validation failed: shares must be a number when status=CLOSED')
+        else:
+            if nav.shares is None:
+                raise ValueError('nav_history write validation failed: shares is required')
+            if nav.nav is None:
+                raise ValueError('nav_history write validation failed: nav is required')
+            try:
+                if float(nav.shares) <= 0:
+                    raise ValueError('nav_history write validation failed: shares must be > 0')
+            except ValueError:
+                raise
+            except Exception:
+                raise ValueError('nav_history write validation failed: shares must be a number')
+            try:
+                if float(nav.nav) <= 0:
+                    raise ValueError('nav_history write validation failed: nav must be > 0')
+            except ValueError:
+                raise
+            except Exception:
+                raise ValueError('nav_history write validation failed: nav must be a number')
 
         existing = self.get_nav_on_date(nav.account, nav.date)
         if existing and existing.record_id and not overwrite_existing:

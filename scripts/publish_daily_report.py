@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -207,145 +207,26 @@ def build_report_data(price_timeout: int, dry_run: bool = False, use_bulk_nav_up
 
 
 def render_daily_report_html(report_bundle: dict[str, Any], config: PublishConfig) -> tuple[str, str]:
-    report = report_bundle["report"]
-    nav_result = report_bundle["nav_result"]
-    nav_snapshot = report_bundle["nav_snapshot"]
+    """Render daily report HTML using the single GitHub-style template.
 
-    overview = report.get("overview") or {}
-    top = report.get("top_holdings") or []
-    latest = nav_snapshot.get("latest") or {}
-    history = nav_snapshot.get("history") or []
+    We keep only ONE template to reduce maintenance cost and avoid style drift.
+    """
+    # Reuse the GitHub-style renderer from generate_daily_report_html.py
+    from scripts import generate_daily_report_html as gh
 
-    total_value = float(report.get("total_value") or 0)
-    nav = float(report.get("nav") or 0)
-    cash_flow = float(report.get("cash_flow") or 0)
-    cash_ratio = float(overview.get("cash_ratio") or 0)
-    stock_ratio = float(overview.get("stock_ratio") or 0)
-    fund_ratio = float(overview.get("fund_ratio") or 0)
-    cagr_pct = float(report.get("cagr_pct") or 0)
-    mtd_nav_change = latest.get("mtd_nav_change")
-    ytd_nav_change = latest.get("ytd_nav_change")
-    mtd_pnl = latest.get("mtd_pnl")
-    ytd_pnl = latest.get("ytd_pnl")
-    shares = latest.get("shares") or nav_result.get("shares")
-    stock_value = latest.get("stock_value")
-    cash_value = latest.get("cash_value")
-    fund_value = total_value - (float(stock_value) if stock_value is not None else 0.0) - (float(cash_value) if cash_value is not None else 0.0)
-    equity_value = (float(stock_value) if stock_value is not None else 0.0) + fund_value
-    equity_ratio = stock_ratio + fund_ratio
-    dt = report.get("date") or date.today().isoformat()
-    # Gap definition: compare "today" against the previous NAV record (not necessarily yesterday).
-    prev_nav = history[-1].get("nav") if len(history) >= 1 else None
-    prev_total_value = history[-1].get("total_value") if len(history) >= 1 else None
+    # build_snapshot() is created in build_report_data(); reuse it to avoid extra price fetch.
+    snapshot = report_bundle.get('snapshot') or {}
 
-    daily_change = (nav - float(prev_nav)) if prev_nav not in (None, 0) else None
-    daily_return = ((nav / float(prev_nav)) - 1) if prev_nav not in (None, 0) else None
+    # gh.render_html expects a bundle with keys: report/full/snapshot
+    report = report_bundle.get('report') or {}
+    nav_result = report_bundle.get('nav_result') or {}
 
-    # Gap PnL is defined as NAV-history.pnl (gap vs previous record), not "today vs yesterday".
-    # We do not store gap nav_change; we only display it.
-    # Prefer using the stored pnl if present; otherwise fall back to an estimated gap pnl.
-    gap_pnl = latest.get("pnl")
-    if gap_pnl is None and (prev_total_value not in (None, 0)):
-        # Fallback estimate: Δtotal_value - cash_flow (cash_flow is already gap vs previous record)
-        gap_pnl = float(total_value) - float(prev_total_value) - float(cash_flow)
+    full = {
+        'warnings': (report.get('warnings') or nav_result.get('warnings') or []),
+    }
 
-    est_daily_pnl = gap_pnl
-
-    rows = []
-    for h in top[:10]:
-        market = h.get("market", "--")
-        rows.append(
-            f"<tr><td>{h['code']}</td><td>{h['name']}</td><td>{type_label(h.get('type'))}</td><td>{market}</td><td>{h['quantity']}</td><td>{fmt_money(h['market_value'])}</td><td>{h['weight'] * 100:.2f}%</td></tr>"
-        )
-    rows_html = "\n".join(rows)
-    warnings = report.get("warnings") or nav_result.get("warnings") or []
-    warnings_html = "" if not warnings else "<section class='section card'><h2>提示</h2><ul>" + "".join(f"<li>{w}</li>" for w in warnings) + "</ul></section>"
-
-    html = f"""<!doctype html>
-<html lang='zh-CN'>
-<head>
-<meta charset='utf-8' />
-<meta name='viewport' content='width=device-width, initial-scale=1' />
-<title>投资日报 - {dt}</title>
-<style>
-:root{{--bg:#0b1020;--panel:#121933;--text:#eef2ff;--muted:#9aa4c7;--line:#2a3563;--accent:#60a5fa;--up:#22c55e;--down:#ef4444;}}
-*{{box-sizing:border-box}}
-body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:linear-gradient(180deg,#0b1020,#0f1630);color:var(--text);padding:32px}}
-.wrap{{max-width:1100px;margin:0 auto}}
-.hero,.card{{background:rgba(18,25,51,.92);border:1px solid var(--line);border-radius:18px;padding:22px}}
-.hero{{padding:28px}}
-.title{{font-size:34px;font-weight:800;margin:0 0 6px}}
-.sub{{color:var(--muted);font-size:13px}}
-.big{{font-size:42px;font-weight:800;margin:16px 0 4px}}
-.grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-top:22px}}
-.grid-2{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:18px}}
-.label{{color:var(--muted);font-size:13px;margin-bottom:6px}}
-.value{{font-size:24px;font-weight:700}}
-.value-sm{{font-size:20px;font-weight:700}}
-.section{{margin-top:18px}}
-.kpi-up{{color:var(--up)}}
-.kpi-down{{color:var(--down)}}
-.table-scroll{{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:16px;border:1px solid var(--line)}}
-.table-scroll table{{min-width:760px;border-collapse:collapse;width:100%}}
-th,td{{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;white-space:nowrap}}
-th{{color:var(--muted)}}
-tr:last-child td{{border-bottom:none}}
-ul{{margin:0;padding-left:20px;color:var(--muted)}}
-@media (max-width:900px){{.grid{{grid-template-columns:repeat(2,minmax(0,1fr))}} .grid-2{{grid-template-columns:1fr}} body{{padding:18px}} .big{{font-size:34px}} .title{{font-size:28px}}}}
-</style>
-</head>
-<body>
-<div class='wrap'>
-  <section class='hero'>
-    <div class='sub'>Portfolio Management · 投资日报</div>
-    <h1 class='title'>投资日报｜{dt}</h1>
-    <div class='sub'>快照时间 {report.get('snapshot_time')} · 账户 {config.account_label}</div>
-    <div class='big'>{fmt_money(total_value)}</div>
-    <div class='sub'>今日净值 NAV {nav:.6f} · 份额 {shares if shares is not None else '--'}</div>
-    <div class='grid'>
-      <div class='card'><div class='label'>较昨日</div><div class='value {'kpi-up' if (daily_return or 0) >= 0 else 'kpi-down'}'>{fmt_opt_pct(daily_return)}</div><div class='sub'>ΔNAV {fmt_opt_nav_delta(daily_change)} · 当日盈亏(估) {fmt_opt_money(est_daily_pnl)}</div></div>
-      <div class='card'><div class='label'>当日资金变动</div><div class='value'>{fmt_money(cash_flow)}</div></div>
-      <div class='card'><div class='label'>权益仓位</div><div class='value'>{fmt_pct(equity_ratio)}</div><div class='sub'>现金 {fmt_pct(cash_ratio)}</div></div>
-      <div class='card'><div class='label'>成立以来年化</div><div class='value'>{cagr_pct:.2f}%</div></div>
-    </div>
-  </section>
-
-  <section class='section grid-2'>
-    <div class='card'>
-      <div class='label'>收益概览</div>
-      <div class='grid' style='margin-top:8px'>
-        <div><div class='label'>本月收益率</div><div class='value-sm {'kpi-up' if (mtd_nav_change or 0) >= 0 else 'kpi-down'}'>{fmt_opt_pct(mtd_nav_change)}</div></div>
-        <div><div class='label'>年内收益率</div><div class='value-sm {'kpi-up' if (ytd_nav_change or 0) >= 0 else 'kpi-down'}'>{fmt_opt_pct(ytd_nav_change)}</div></div>
-        <div><div class='label'>本月收益额</div><div class='value-sm {'kpi-up' if (mtd_pnl or 0) >= 0 else 'kpi-down'}'>{fmt_opt_money(mtd_pnl)}</div></div>
-        <div><div class='label'>年内收益额</div><div class='value-sm {'kpi-up' if (ytd_pnl or 0) >= 0 else 'kpi-down'}'>{fmt_opt_money(ytd_pnl)}</div></div>
-      </div>
-    </div>
-    <div class='card'>
-      <div class='label'>资产概览</div>
-      <div class='grid' style='margin-top:8px'>
-        <div><div class='label'>权益资产（股票+基金）</div><div class='value-sm'>{fmt_opt_money(equity_value)}</div></div>
-        <div><div class='label'>现金资产</div><div class='value-sm'>{fmt_opt_money(cash_value)}</div></div>
-        <div><div class='label'>权益仓位</div><div class='value-sm'>{fmt_pct(equity_ratio)}</div></div>
-        <div><div class='label'>现金仓位</div><div class='value-sm'>{fmt_pct(cash_ratio)}</div></div>
-      </div>
-      <div class='sub' style='margin-top:12px'>{nav_result.get('message', '')}</div>
-    </div>
-  </section>
-
-  {warnings_html}
-
-  <section class='section card'>
-    <h2>前十大持仓</h2>
-    <div class='table-scroll'>
-      <table>
-        <tr><th>代码</th><th>名称</th><th>类型</th><th>账户</th><th>数量</th><th>市值</th><th>权重</th></tr>
-        {rows_html}
-      </table>
-    </div>
-  </section>
-</div>
-</body>
-</html>"""
+    dt = report.get('date') or date.today().isoformat()
+    html = gh.render_html({'report': report, 'full': full, 'snapshot': snapshot})
     return dt, html
 
 
