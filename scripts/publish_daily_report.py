@@ -230,7 +230,20 @@ def render_daily_report_html(report_bundle: dict[str, Any], config: PublishConfi
     return dt, html
 
 
+def _ensure_publish_server_running() -> None:
+    """Best-effort: avoid external 502 by ensuring :3000 publish server is up."""
+    try:
+        ensure_script = WORKSPACE / "tools" / "ensure_publish_server.py"
+        if ensure_script.exists():
+            __import__("subprocess").run([sys.executable, str(ensure_script), "--quiet"], check=False)
+    except Exception:
+        # Publishing still writes files; server health is handled separately.
+        pass
+
+
 def publish_report(report_date: str, html: str, config: PublishConfig) -> dict[str, Any]:
+    _ensure_publish_server_running()
+
     slug = f"investment-daily-{report_date}"
     report_path = config.reports_dir / f"{slug}.html"
     report_path.parent.mkdir(parents=True, exist_ok=True)

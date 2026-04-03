@@ -293,11 +293,30 @@ class PriceFetcher:
             代码到价格数据的映射
         """
         name_map = name_map or {}
-        results = {}
+        results: Dict[str, Dict] = {}
+
+        # === 稳定去重（保序）===
+        # 同一标的在多券商/多来源持仓中可能重复出现；重复 code 会导致冗余外部请求，
+        # 且 tencent_batch meta 出现 returned < requested 的“假警告”。
+        # 这里对 code 做 strip + upper 的稳定去重，保留首个出现的原始字符串作为 primary key。
+        original_codes = list(codes or [])
+        norm_to_codes: Dict[str, List[str]] = {}
+        unique_codes: List[str] = []
+        norm_to_primary: Dict[str, str] = {}
+        for code in original_codes:
+            norm = (code or '').strip().upper()
+            if not norm:
+                continue
+            if norm not in norm_to_primary:
+                norm_to_primary[norm] = code
+                unique_codes.append(code)
+            norm_to_codes.setdefault(norm, []).append(code)
+
+        codes = unique_codes
 
         # 第一步：智能检查缓存，分离需要查询和已有缓存的
-        to_fetch = []
-        expired_cache = {}  # 记录过期缓存，用于 fallback
+        to_fetch: List[str] = []
+        expired_cache: Dict[str, Dict] = {}  # 记录过期缓存，用于 fallback
 
         # 批次级：提前获取一次汇率，供本批次所有资产复用（避免每个资产重复拉汇率）
         try:
@@ -354,6 +373,17 @@ class PriceFetcher:
                 results[code] = expired_cache[code]
 
         if not to_fetch:
+            # 把 primary 的结果复制回重复出现的 code（如果有重复）
+            if norm_to_codes:
+                out = dict(results)
+                for norm, codes_list in norm_to_codes.items():
+                    if len(codes_list) <= 1:
+                        continue
+                    primary = norm_to_primary.get(norm)
+                    if primary and primary in results:
+                        for dup in codes_list:
+                            out.setdefault(dup, results[primary])
+                return out
             return results
 
         # 第二步：区分美股和非美股
@@ -430,6 +460,18 @@ class PriceFetcher:
             if us_codes:
                 us_results = self._fetch_us_batch(us_codes, name_map, expired_cache)
                 results.update(us_results)
+
+        # 把 primary 的结果复制回重复出现的 code（如果有重复）
+        if norm_to_codes:
+            out = dict(results)
+            for norm, codes_list in norm_to_codes.items():
+                if len(codes_list) <= 1:
+                    continue
+                primary = norm_to_primary.get(norm)
+                if primary and primary in results:
+                    for dup in codes_list:
+                        out.setdefault(dup, results[primary])
+            return out
 
         return results
 
