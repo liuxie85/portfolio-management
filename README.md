@@ -3,6 +3,7 @@
 基于飞书多维表（Bitable）的投资组合净值系统：**用基金净值法记账**，输出持仓/现金/收益统计，并生成日报。
 
 - For Agents：看 `SKILL.md`（能力边界、API 入口、约束）
+- Engineering Rules：看 `/home/node/.openclaw/workspace/docs/ENGINEERING_RULES.md`（通用开发要求）
 - For Humans：看本文（Quickstart / Cheatsheet / 发布与排障）
 
 - 适用：长期投资组合的“账 + 报告”一体化
