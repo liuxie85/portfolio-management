@@ -10,8 +10,6 @@
 4. 美股多数据源备选，防止限流
 """
 import requests
-from decimal import Decimal, ROUND_HALF_UP
-import re
 import os
 import time
 import random
@@ -28,6 +26,23 @@ from .market_time import MarketTimeUtil
 from .asset_utils import detect_market_type as _detect_market_type_func
 from . import config as _config
 from .pricing import PriceRequest, PriceService
+from .pricing.classifier import (
+    get_exchange_prefix,
+    get_type_hints_from_name,
+    is_etf,
+    is_otc_fund,
+    normalize_code_with_name,
+)
+from .pricing.payload import (
+    MONEY_QUANT,
+    PCT_QUANT,
+    RATE_QUANT,
+    normalize_price_payload,
+    quantize_money,
+    quantize_pct,
+    quantize_rate,
+    to_decimal,
+)
 
 
 # 汇率缓存文件路径（使用项目相对路径）
@@ -42,9 +57,9 @@ class PriceFetcher:
     - Provide scripts/diagnose_pricing.py for quick observability.
     """
 
-    MONEY_QUANT = Decimal('0.01')
-    RATE_QUANT = Decimal('0.000001')
-    PCT_QUANT = Decimal('0.01')
+    MONEY_QUANT = MONEY_QUANT
+    RATE_QUANT = RATE_QUANT
+    PCT_QUANT = PCT_QUANT
 
     # 关键词列表（用于名称辅助判断资产类型）
     STOCK_KEYWORDS = [
@@ -64,24 +79,20 @@ class PriceFetcher:
     CASH_KEYWORDS = ['现金', '货币', 'mmf', 'cash', '余额宝']
 
     @staticmethod
-    def _to_decimal(value) -> Decimal:
-        if value is None:
-            return Decimal('0')
-        if isinstance(value, Decimal):
-            return value
-        return Decimal(str(value))
+    def _to_decimal(value):
+        return to_decimal(value)
 
     @classmethod
     def _quantize_money(cls, value) -> float:
-        return float(cls._to_decimal(value).quantize(cls.MONEY_QUANT, rounding=ROUND_HALF_UP))
+        return quantize_money(value)
 
     @classmethod
     def _quantize_rate(cls, value) -> float:
-        return float(cls._to_decimal(value).quantize(cls.RATE_QUANT, rounding=ROUND_HALF_UP))
+        return quantize_rate(value)
 
     @classmethod
     def _quantize_pct(cls, value) -> float:
-        return float(cls._to_decimal(value).quantize(cls.PCT_QUANT, rounding=ROUND_HALF_UP))
+        return quantize_pct(value)
 
     @classmethod
     def _normalize_price_payload(cls, payload: Dict) -> Dict:
@@ -92,21 +103,7 @@ class PriceFetcher:
         - change_pct / exchange_rate 量化
         - 自动补充 fetched_at（北京时间 naive ISO 字符串），便于诊断“是否刷新/是否走缓存”
         """
-        from .time_utils import bj_now_naive
-
-        result = dict(payload)
-        # fetched_at 表示“本次实时抓取时间”。如果数据来自缓存（is_from_cache=True），不自动填充。
-        if not result.get('is_from_cache'):
-            result.setdefault('fetched_at', bj_now_naive().isoformat())
-
-        for key in ('price', 'prev_close', 'open', 'high', 'low', 'change', 'cny_price'):
-            if key in result and result[key] is not None:
-                result[key] = cls._quantize_money(result[key])
-        if 'change_pct' in result and result['change_pct'] is not None:
-            result['change_pct'] = cls._quantize_pct(result['change_pct'])
-        if 'exchange_rate' in result and result['exchange_rate'] is not None:
-            result['exchange_rate'] = cls._quantize_rate(result['exchange_rate'])
-        return result
+        return normalize_price_payload(payload)
 
     def __init__(self, storage=None, use_cache: bool = True):
         """
@@ -357,7 +354,7 @@ class PriceFetcher:
                         try:
                             expire_dt = datetime.fromisoformat(cached.expires_at.replace('Z', '+00:00')) if isinstance(cached.expires_at, str) else cached.expires_at
                             is_expired = expire_dt <= bj_now_naive()
-                        except:
+                        except (ValueError, TypeError, AttributeError):
                             pass
 
                     if not is_expired:
@@ -1030,49 +1027,15 @@ class PriceFetcher:
 
     def _normalize_code_with_name(self, code: str, name: str) -> str:
         """根据资产名称给代码添加交易所前缀"""
-        if code.startswith(('SH', 'SZ')):
-            return code
-
-        if not (code.isdigit() and len(code) == 6):
-            return code
-
-        name_lower = (name or '').lower()
-
-        is_stock = any(kw in name_lower for kw in self.STOCK_KEYWORDS)
-        is_fund = any(kw in name_lower for kw in self.FUND_KEYWORDS)
-
-        if is_stock and not is_fund:
-            if code.startswith('6'):
-                return f'SH{code}'
-            elif code.startswith(('0', '3')):
-                return f'SZ{code}'
-
-        return code
+        return normalize_code_with_name(code, name)
 
     def _get_type_hints_from_name(self, name: str) -> Dict:
         """从资产名称中提取类型提示"""
-        if not name:
-            return {}
-
-        name_lower = name.lower()
-        hints = {}
-
-        hints['is_fund'] = any(kw in name_lower for kw in self.FUND_KEYWORDS)
-        hints['is_etf'] = 'etf' in name_lower
-        hints['is_stock'] = any(kw in name_lower for kw in self.STOCK_KEYWORDS) and not hints['is_fund']
-        hints['is_cash'] = any(kw in name_lower for kw in self.CASH_KEYWORDS)
-
-        return hints
+        return get_type_hints_from_name(name)
 
     def _is_etf(self, code: str) -> bool:
         """检测是否为ETF/场内基金"""
-        if not code.isdigit() or len(code) != 6:
-            return False
-        if code.startswith('5'):
-            return True
-        if code.startswith('15') and not code.startswith('16'):
-            return True
-        return False
+        return is_etf(code)
 
     def _is_otc_fund(self, code: str) -> bool:
         """检测是否为场外基金代码
@@ -1081,27 +1044,11 @@ class PriceFetcher:
         无法仅凭代码区分。此方法仅识别不含歧义的场外基金代码。
         歧义代码需依赖 name_hints 在 _fetch_realtime 中判断。
         """
-        if not code.isdigit() or len(code) != 6:
-            return False
-        # 明确是A股的前缀: 600/601/603/605/688/689(沪市), 300/301(创业板)
-        if code.startswith(('600', '601', '603', '605', '688', '689', '300', '301')):
-            return False
-        # 明确是场内ETF的前缀: 5xx(沪市ETF), 15x(深市ETF)
-        if code.startswith('5') or code.startswith('15'):
-            return False
-        # 明确是场外基金的前缀 (不与A股重叠)
-        if code.startswith(('004', '005', '006', '007', '008', '009')):
-            return True
-        if code.startswith(('01', '27', '16')):
-            return True
-        # 000/001/002/003 开头: 与A股重叠，返回 False 交给 name_hints 判断
-        return False
+        return is_otc_fund(code)
 
     def _get_exchange_prefix(self, code: str) -> str:
         """获取交易所前缀"""
-        if code.startswith(('6', '5')):
-            return 'sh'
-        return 'sz'
+        return get_exchange_prefix(code)
 
     def _load_rate_cache_from_file(self) -> Optional[Dict]:
         """从 JSON 文件加载汇率缓存"""
@@ -1305,675 +1252,82 @@ class PriceFetcher:
             # 完全没有缓存，抛出异常
             raise RuntimeError(f"获取汇率失败且没有可用缓存: {e}")
 
-    # ========== 具体数据源获取方法 ==========
+    # ========== Provider compatibility adapters ==========
 
     def _fetch_a_stock(self, code: str) -> Optional[Dict]:
-        """获取A股价格 (腾讯主源 + AKShare备用)"""
-        # 1. 先尝试腾讯API
-        try:
-            result = self._fetch_a_stock_from_tencent(code)
-            if result:
-                return result
-        except requests.Timeout:
-            print(f"[超时] 腾讯API获取A股价格 {code}")
-        except Exception as e:
-            print(f"[腾讯API失败] 获取A股价格 {code}: {e}")
+        """兼容旧调用：A 股实时价格实现已迁移到 CNStockProvider。"""
+        from .pricing.providers.cn import CNStockProvider
 
-        # 2. 腾讯失败，尝试AKShare
-        print(f"[备用源] 尝试AKShare获取A股 {code}...")
-        try:
-            result = self._fetch_a_stock_from_akshare(code)
-            if result:
-                return result
-        except Exception as e:
-            print(f"[AKShare失败] 获取A股价格 {code}: {e}")
-
-        return None
+        return CNStockProvider(self).fetch_a_stock(code)
 
     def _fetch_a_stock_from_tencent(self, code: str) -> Optional[Dict]:
-        """从腾讯获取A股价格（单个）。
+        """兼容旧调用：腾讯 A 股源已迁移到 CNStockProvider。"""
+        from .pricing.providers.cn import CNStockProvider
 
-        优先推荐使用 _fetch_tencent_quotes_batch（批量），此函数保留作为兼容/回退。
-        """
-        if code.startswith('SH'):
-            query_code = code.lower()
-        elif code.startswith('SZ'):
-            query_code = code.lower()
-        elif code.isdigit():
-            query_code = f'sh{code}' if code.startswith('6') else f'sz{code}'
-        else:
-            query_code = code
-
-        from .tencent_batch import fetch_batch as _tencent_fetch_batch
-        parts_map, _meta = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
-        data = parts_map.get(query_code)
-        if data and len(data) > 45:
-            return self._normalize_price_payload({
-                'code': code,
-                'name': data[1],
-                'price': float(data[3]),
-                'prev_close': float(data[4]),
-                'open': float(data[5]),
-                'high': float(data[33]),
-                'low': float(data[34]),
-                'change': float(data[31]),
-                'change_pct': float(data[32]),
-                'volume': float(data[36]) * 100 if data[36] else 0,
-                'time': data[30],
-                'currency': 'CNY',
-                'cny_price': float(data[3]),
-                'market_type': 'cn',
-                'source': 'tencent'
-            })
-        return None
+        return CNStockProvider(self).fetch_from_tencent(code)
 
     def _fetch_a_stock_from_akshare(self, code: str) -> Optional[Dict]:
-        """从AKShare获取A股价格 (备用源)"""
-        try:
-            import akshare as ak
-            import pandas as pd
+        """兼容旧调用：AKShare A 股源已迁移到 CNStockProvider。"""
+        from .pricing.providers.cn import CNStockProvider
 
-            # 标准化代码
-            if code.startswith('SH') or code.startswith('SZ'):
-                pure_code = code[2:]
-            else:
-                pure_code = code
-
-            # 使用akshare获取实时行情
-            df = ak.stock_zh_a_spot_em()
-
-            # 查找对应代码
-            row = df[df['代码'] == pure_code]
-            if row.empty:
-                return None
-
-            data = row.iloc[0]
-
-            return self._normalize_price_payload({
-                'code': code,
-                'name': data['名称'],
-                'price': float(data['最新价']) if pd.notna(data['最新价']) else 0.0,
-                'prev_close': float(data['昨收']) if pd.notna(data['昨收']) else 0.0,
-                'open': float(data['今开']) if pd.notna(data['今开']) else 0.0,
-                'high': float(data['最高']) if pd.notna(data['最高']) else 0.0,
-                'low': float(data['最低']) if pd.notna(data['最低']) else 0.0,
-                'change': float(data['涨跌额']) if pd.notna(data['涨跌额']) else 0.0,
-                'change_pct': float(data['涨跌幅']) if pd.notna(data['涨跌幅']) else 0.0,
-                'volume': float(data['成交量']) if pd.notna(data['成交量']) else 0.0,
-                'time': data.get('时间', bj_now_naive().strftime('%H:%M:%S')),
-                'currency': 'CNY',
-                'cny_price': float(data['最新价']) if pd.notna(data['最新价']) else 0.0,
-                'market_type': 'cn',
-                'source': 'akshare'
-            })
-        except ImportError:
-            print("[AKShare] 未安装akshare，跳过备用源")
-            return None
-        except Exception as e:
-            print(f"[AKShare] 获取A股失败: {e}")
-            return None
+        return CNStockProvider(self).fetch_from_akshare(code)
 
     def _fetch_hk_stock(self, code: str) -> Optional[Dict]:
-        """获取港股价格 (腾讯主源 + AKShare备用)"""
-        # 1. 先尝试腾讯API
-        try:
-            result = self._fetch_hk_stock_from_tencent(code)
-            if result:
-                return result
-        except requests.Timeout:
-            print(f"[超时] 腾讯API获取港股价格 {code}")
-        except Exception as e:
-            print(f"[腾讯API失败] 获取港股价格 {code}: {e}")
+        """兼容旧调用：港股实时价格实现已迁移到 HKStockProvider。"""
+        from .pricing.providers.hk import HKStockProvider
 
-        # 2. 腾讯失败，尝试AKShare
-        print(f"[备用源] 尝试AKShare获取港股 {code}...")
-        try:
-            result = self._fetch_hk_stock_from_akshare(code)
-            if result:
-                return result
-        except Exception as e:
-            print(f"[AKShare失败] 获取港股价格 {code}: {e}")
-
-        return None
+        return HKStockProvider(self).fetch_hk_stock(code)
 
     def _fetch_hk_stock_from_tencent(self, code: str) -> Optional[Dict]:
-        """从腾讯获取港股价格（单个）。
+        """兼容旧调用：腾讯港股源已迁移到 HKStockProvider。"""
+        from .pricing.providers.hk import HKStockProvider
 
-        优先推荐使用 _fetch_tencent_quotes_batch（批量），此函数保留作为兼容/回退。
-        """
-        if code.startswith('HK'):
-            numeric_part = code[2:].zfill(5)
-        else:
-            numeric_part = code.zfill(5)
-
-        query_code = f'hk{numeric_part}'
-
-        from .tencent_batch import fetch_batch as _tencent_fetch_batch
-        parts_map, _meta = _tencent_fetch_batch(self.session, [query_code], timeout=5, chunk_size=1)
-        data = parts_map.get(query_code)
-        if data and len(data) > 45:
-            price = float(data[3])
-            rates = self._fetch_exchange_rates()
-            hkd_cny = rates['HKDCNY']
-
-            return self._normalize_price_payload({
-                'code': code,
-                'name': data[1],
-                'price': price,
-                'prev_close': float(data[4]),
-                'open': float(data[5]),
-                'high': float(data[33]),
-                'low': float(data[34]),
-                'change': float(data[31]),
-                'change_pct': float(data[32]),
-                'volume': float(data[36]) * 100 if data[36] else 0,
-                'time': data[30],
-                'currency': 'HKD',
-                'cny_price': price * hkd_cny,
-                'exchange_rate': hkd_cny,
-                'market_type': 'hk',
-                'source': 'tencent'
-            })
-        return None
+        return HKStockProvider(self).fetch_from_tencent(code)
 
     def _fetch_hk_stock_from_akshare(self, code: str) -> Optional[Dict]:
-        """从AKShare获取港股价格 (备用源)"""
-        try:
-            import akshare as ak
-            import pandas as pd
+        """兼容旧调用：AKShare 港股源已迁移到 HKStockProvider。"""
+        from .pricing.providers.hk import HKStockProvider
 
-            # 标准化代码
-            if code.startswith('HK'):
-                pure_code = code[2:].zfill(5)
-            else:
-                pure_code = code.zfill(5)
-
-            # 使用akshare获取港股实时行情
-            df = ak.stock_hk_spot_em()
-
-            # 查找对应代码
-            row = df[df['代码'] == pure_code]
-            if row.empty:
-                return None
-
-            data = row.iloc[0]
-            price = float(data['最新价']) if pd.notna(data['最新价']) else 0.0
-
-            # 获取汇率
-            rates = self._fetch_exchange_rates()
-            hkd_cny = rates['HKDCNY']
-
-            return self._normalize_price_payload({
-                'code': code,
-                'name': data['名称'],
-                'price': price,
-                'prev_close': float(data['昨收']) if pd.notna(data['昨收']) else 0.0,
-                'open': float(data['今开']) if pd.notna(data['今开']) else 0.0,
-                'high': float(data['最高']) if pd.notna(data['最高']) else 0.0,
-                'low': float(data['最低']) if pd.notna(data['最低']) else 0.0,
-                'change': float(data['涨跌额']) if pd.notna(data['涨跌额']) else 0.0,
-                'change_pct': float(data['涨跌幅']) if pd.notna(data['涨跌幅']) else 0.0,
-                'volume': float(data['成交量']) if pd.notna(data['成交量']) else 0.0,
-                'time': data.get('时间', bj_now_naive().strftime('%H:%M:%S')),
-                'currency': 'HKD',
-                'cny_price': price * hkd_cny,
-                'exchange_rate': hkd_cny,
-                'market_type': 'hk',
-                'source': 'akshare'
-            })
-        except ImportError:
-            print("[AKShare] 未安装akshare，跳过备用源")
-            return None
-        except Exception as e:
-            print(f"[AKShare] 获取港股失败: {e}")
-            return None
+        return HKStockProvider(self).fetch_from_akshare(code)
 
     def _fetch_us_stock(self, code: str) -> Optional[Dict]:
-        """获取美股价格 (带多数据源备选和重试机制)
+        """兼容旧调用：美股实时价格实现已迁移到 USStockProvider。"""
+        from .pricing.providers.us import USStockProvider
 
-        数据源优先级:
-        1. Finnhub API (如果配置了 API key) - 首选，稳定快速
-        2. Yahoo Finance API - 免费备选
-        3. yfinance 库 - 最后备选
-        """
-        yf_code = code.replace('.', '-')
-        errors = []
-
-        # 尝试1: Finnhub API (如果配置了 API key)
-        finnhub_key = _config.get('finnhub_api_key')
-        if finnhub_key:
-            try:
-                result = self._fetch_us_stock_finnhub(yf_code, finnhub_key)
-                if result:
-                    return result
-            except Exception as e:
-                errors.append(f"Finnhub: {e}")
-
-        # 尝试2: Yahoo Finance 直接API (带重试)
-        try:
-            result = self._retry_with_backoff(
-                lambda: self._fetch_us_stock_yahoo_api(yf_code),
-                max_retries=2,
-                base_delay=1.0
-            )
-            if result:
-                return result
-        except Exception as e:
-            errors.append(f"Yahoo API: {e}")
-
-        # 尝试3: yfinance库
-        try:
-            import yfinance as yf
-            ticker = yf.Ticker(yf_code)
-            info = ticker.info
-            hist = ticker.history(period="1d")
-
-            if not hist.empty:
-                latest = hist.iloc[-1]
-                prev_close = info.get('previousClose', latest['Open'])
-                current = latest['Close']
-                change = current - prev_close
-                change_pct = (change / prev_close * 100) if prev_close else 0
-
-                rates = self._fetch_exchange_rates()
-                usd_cny = rates['USDCNY']
-
-                return self._normalize_price_payload({
-                    'code': code,
-                    'name': info.get('shortName', yf_code),
-                    'price': current,
-                    'prev_close': prev_close,
-                    'open': latest['Open'],
-                    'high': latest['High'],
-                    'low': latest['Low'],
-                    'change': change,
-                    'change_pct': change_pct,
-                    'volume': int(latest['Volume']),
-                    'currency': info.get('currency', 'USD'),
-                    'cny_price': current * usd_cny,
-                    'exchange_rate': usd_cny,
-                    'market_type': 'us',
-                    'source': 'yfinance'
-                })
-        except ImportError:
-            errors.append("yfinance未安装")
-        except Exception as e:
-            errors.append(f"yfinance: {e}")
-
-        # 所有数据源都失败
-        print(f"获取美股价格失败 {code}: {'; '.join(errors)}")
-        return None
+        return USStockProvider(self).fetch_us_stock(code)
 
     def _fetch_us_stock_finnhub(self, code: str, api_key: str) -> Optional[Dict]:
-        """通过 Finnhub API 获取美股价格
+        """兼容旧调用：Finnhub 源已迁移到 USStockProvider。"""
+        from .pricing.providers.us import USStockProvider
 
-        Args:
-            code: 股票代码（如 AAPL, TSLA）
-            api_key: Finnhub API key
-
-        Returns:
-            价格数据字典或 None
-        """
-        url = f"https://finnhub.io/api/v1/quote"
-        params = {
-            'symbol': code,
-            'token': api_key
-        }
-
-        response = self.session.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        # Finnhub 返回字段：c(当前价), d(涨跌额), dp(涨跌幅%), h(最高), l(最低), o(开盘), pc(昨收)
-        current = data.get('c')
-        prev_close = data.get('pc')
-
-        if not current:
-            return None
-
-        change = data.get('d', current - prev_close if prev_close else 0)
-        change_pct = data.get('dp', (change / prev_close * 100) if prev_close else 0)
-
-        rates = self._fetch_exchange_rates()
-        usd_cny = rates['USDCNY']
-
-        return self._normalize_price_payload({
-            'code': code,
-            'name': code,  # Finnhub quote 接口不返回名称，需要单独调用
-            'price': current,
-            'prev_close': prev_close if prev_close else current,
-            'open': data.get('o', current),
-            'high': data.get('h', current),
-            'low': data.get('l', current),
-            'change': change,
-            'change_pct': change_pct,
-            'currency': 'USD',
-            'cny_price': current * usd_cny,
-            'exchange_rate': usd_cny,
-            'market_type': 'us',
-            'source': 'finnhub'
-        })
+        return USStockProvider(self).fetch_finnhub(code, api_key)
 
     def _fetch_us_stock_yahoo_api(self, code: str) -> Optional[Dict]:
-        """通过Yahoo Finance直接API获取美股价格"""
-        # Yahoo Finance 实时报价API
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{code}?interval=1d&range=2d"
+        """兼容旧调用：Yahoo 源已迁移到 USStockProvider。"""
+        from .pricing.providers.us import USStockProvider
 
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-        }
-
-        response = self.session.get(url, headers=headers, timeout=15)
-
-        if response.status_code == 429:
-            raise Exception("Rate limited")
-
-        response.raise_for_status()
-        data = response.json()
-
-        chart = data.get('chart', {})
-        if chart.get('error'):
-            raise Exception(chart['error'].get('description', 'Unknown error'))
-
-        result = chart.get('result', [{}])[0]
-        meta = result.get('meta', {})
-        timestamps = result.get('timestamp', [])
-        quotes = result.get('indicators', {}).get('quote', [{}])[0]
-
-        if not timestamps or not quotes.get('close'):
-            return None
-
-        # 获取最新数据
-        closes = quotes['close']
-        opens = quotes.get('open', [])
-        highs = quotes.get('high', [])
-        lows = quotes.get('low', [])
-        volumes = quotes.get('volume', [])
-
-        # 过滤None值，获取最后一个有效价格
-        valid_closes = [c for c in closes if c is not None]
-        if not valid_closes:
-            return None
-
-        current = valid_closes[-1]
-        prev_close = meta.get('previousClose') or meta.get('chartPreviousClose')
-
-        # 如果只有一天数据，用开盘价作为昨收
-        if prev_close is None and len(valid_closes) >= 2:
-            prev_close = valid_closes[-2]
-        elif prev_close is None and opens:
-            prev_close = opens[0]
-        else:
-            prev_close = current
-
-        change = current - prev_close
-        change_pct = (change / prev_close * 100) if prev_close else 0
-
-        # 获取最新有效的高低价和成交量
-        valid_highs = [h for h in highs if h is not None]
-        valid_lows = [l for l in lows if l is not None]
-        valid_volumes = [v for v in volumes if v is not None]
-
-        rates = self._fetch_exchange_rates()
-        usd_cny = rates['USDCNY']
-
-        return self._normalize_price_payload({
-            'code': code,
-            'name': meta.get('shortName') or meta.get('longName') or meta.get('symbol'),
-            'price': current,
-            'prev_close': prev_close,
-            'open': opens[-1] if opens and opens[-1] else current,
-            'high': valid_highs[-1] if valid_highs else current,
-            'low': valid_lows[-1] if valid_lows else current,
-            'change': change,
-            'change_pct': change_pct,
-            'volume': int(valid_volumes[-1]) if valid_volumes else 0,
-            'currency': meta.get('currency', 'USD'),
-            'cny_price': current * usd_cny,
-            'exchange_rate': usd_cny,
-            'market_type': 'us',
-            'source': 'yahoo_api'
-        })
+        return USStockProvider(self).fetch_yahoo_api(code)
 
     def _fetch_etf(self, code: str) -> Optional[Dict]:
-        """获取ETF价格"""
-        try:
-            prefix = self._get_exchange_prefix(code)
-            query_code = f'{prefix}{code}'
+        """兼容旧调用：ETF 实时价格实现已迁移到 ETFProvider。"""
+        from .pricing.providers.etf import ETFProvider
 
-            url = f"http://qt.gtimg.cn/q={query_code}"
-            response = self.session.get(url, timeout=10)
-            response.encoding = 'gb2312'
-            text = response.text
-
-            pattern = rf'v_{query_code}="([^"]+)"'
-            match = re.search(pattern, text)
-
-            if match:
-                data = match.group(1).split('~')
-                if len(data) > 45:
-                    return self._normalize_price_payload({
-                        'code': code,
-                        'name': data[1],
-                        'price': float(data[3]),
-                        'prev_close': float(data[4]),
-                        'open': float(data[5]),
-                        'high': float(data[33]),
-                        'low': float(data[34]),
-                        'change': float(data[31]),
-                        'change_pct': float(data[32]),
-                        'volume': float(data[36]) * 100 if data[36] else 0,
-                        'time': data[30],
-                        'currency': 'CNY',
-                        'cny_price': float(data[3]),
-                        'market_type': 'cn',
-                        'source': 'tencent_etf'
-                    })
-            return None
-
-        except Exception as e:
-            print(f"获取ETF价格失败 {code}: {e}")
-            return None
+        return ETFProvider(self).fetch_etf(code)
 
     def _fetch_fund(self, code: str) -> Optional[Dict]:
-        """获取场外基金净值。
+        """兼容旧调用：场外基金净值实现已迁移到 FundProvider。"""
+        from .pricing.providers.fund import FundProvider
 
-        优化策略：
-        0. 优先使用腾讯 jj 接口（极快、无额外依赖）
-        1. akshare 单基金查询（<1秒，需依赖）
-        2. akshare 全量排行（慢，20-30秒，需依赖）
-        3. 东方财富网页抓取（备用）
-
-        说明：本项目的“日报/record_nav”对时效性要求高。
-        因此将“无依赖、低延迟”的数据源放在最前面，避免因依赖缺失或慢接口拖垮整体估值。
-        """
-
-        # 尝试0: 腾讯 jj 接口（推荐）
-        try:
-            result = self._fetch_fund_from_tencent(code)
-            if result:
-                result['market_type'] = 'fund'
-                return result
-        except Exception:
-            pass
-
-        # 尝试1/2: akshare（若可用）
-        try:
-            import akshare as ak
-            import pandas as pd
-
-            # 尝试1: 单个基金查询（快，<1秒）
-            try:
-                df = ak.fund_open_fund_info_em(symbol=code)
-                if not df.empty and len(df) > 0:
-                    latest = df.iloc[-1]
-                    nav = float(latest['单位净值'])
-
-                    if nav > 0:
-                        change_pct = None
-                        if '日增长率' in latest and latest['日增长率'] is not None:
-                            try:
-                                change_pct = float(latest['日增长率'])
-                            except (ValueError, TypeError):
-                                pass
-
-                        name = None
-                        try:
-                            name_df = ak.fund_individual_basic_info_xq(symbol=code)
-                            if not name_df.empty and '基金简称' in name_df.columns:
-                                name = name_df['基金简称'].values[0]
-                        except Exception:
-                            pass
-
-                        return self._normalize_price_payload({
-                            'code': code,
-                            'name': name,
-                            'price': nav,
-                            'nav_date': str(latest.get('净值日期') or ''),
-                            'change_pct': change_pct,
-                            'currency': 'CNY',
-                            'cny_price': nav,
-                            'market_type': 'fund',
-                            'source': 'akshare_info'
-                        })
-            except Exception as e:
-                print(f"[基金] akshare 单基金查询失败 {code}: {e}，尝试备用方案...")
-
-            # 尝试2: 全量排行查询（慢，20-30秒）
-            try:
-                print(f"[基金] 正在从全量排行获取 {code}（可能需要20-30秒）...")
-                df = ak.fund_open_fund_rank_em()
-                fund_data = df[df['基金代码'] == code]
-
-                if not fund_data.empty:
-                    row = fund_data.iloc[0]
-                    try:
-                        change_pct = float(row['日增长率'])
-                    except (ValueError, TypeError):
-                        change_pct = None
-
-                    nav = float(row['单位净值']) if pd.notna(row['单位净值']) else None
-                    if nav and nav > 0:
-                        return self._normalize_price_payload({
-                            'code': code,
-                            'name': row.get('基金简称'),
-                            'price': nav,
-                            'nav_date': str(row.get('日期') or ''),
-                            'change_pct': change_pct,
-                            'currency': 'CNY',
-                            'cny_price': nav,
-                            'market_type': 'fund',
-                            'source': 'akshare_rank'
-                        })
-            except Exception:
-                pass
-
-        except ImportError:
-            # akshare 不可用时，继续走网页抓取备用
-            pass
-        except Exception as e:
-            print(f"获取基金价格失败 {code}: {e}")
-
-        # 尝试3: 从东方财富网抓取
-        try:
-            result = self._fetch_fund_from_eastmoney(code)
-            if result:
-                result['market_type'] = 'fund'
-                return result
-        except Exception:
-            pass
-
-        return None
+        return FundProvider(self).fetch_fund(code)
 
     def _fetch_fund_from_tencent(self, code: str) -> Optional[Dict]:
-        """从腾讯 jj 接口获取场外基金净值（无依赖、低延迟）。
+        """兼容旧调用：腾讯基金源已迁移到 FundProvider。"""
+        from .pricing.providers.fund import FundProvider
 
-        腾讯接口示例：
-        - http://qt.gtimg.cn/q=jj007722
-
-        返回格式示例：
-        v_jj007722="007722~基金简称~0.0000~0.0000~~1.9559~1.9559~...~2026-03-23~";
-
-        约定：
-        - 单位净值（NAV）在 parts[5]
-        """
-        code = (code or '').strip().upper()
-        if code.startswith(('SH', 'SZ')):
-            code = code[2:]
-
-        if not (code.isdigit() and len(code) == 6):
-            return None
-
-        query_code = f"jj{code}"
-        url = f"http://qt.gtimg.cn/q={query_code}"
-        response = self.session.get(url, timeout=5)
-        response.encoding = 'gb2312'
-        text = response.text
-
-        import re
-        match = re.search(rf'v_{query_code}="([^"]+)"', text)
-        if not match:
-            return None
-
-        parts = match.group(1).split('~')
-        if len(parts) < 9:
-            return None
-
-        name = parts[1]
-        try:
-            nav = float(parts[5])
-        except Exception:
-            return None
-
-        if not nav or nav <= 0:
-            return None
-
-        nav_date = parts[8] if len(parts) > 8 else None
-
-        return self._normalize_price_payload({
-            'code': code,
-            'name': name,
-            'price': nav,
-            'nav_date': nav_date,
-            'currency': 'CNY',
-            'cny_price': nav,
-            'source': 'tencent_jj'
-        })
+        return FundProvider(self).fetch_from_tencent(code)
 
     def _fetch_fund_from_eastmoney(self, code: str) -> Optional[Dict]:
-        """从东方财富网获取基金净值"""
-        try:
-            url = f"http://fund.eastmoney.com/{code}.html"
-            response = self.session.get(url, timeout=10)
-            response.encoding = 'utf-8'
-            text = response.text
+        """兼容旧调用：东方财富基金源已迁移到 FundProvider。"""
+        from .pricing.providers.fund import FundProvider
 
-            name_match = re.search(r'<h1[^>]*>([^<]+)</h1>', text)
-            name = name_match.group(1).strip() if name_match else None
-
-            nav_match = re.search(r'class="dataNums"[^>]*>\s*<span[^>]*>([\d.]+)</span>', text)
-            if nav_match:
-                nav = float(nav_match.group(1))
-
-                date_match = re.search(r'(\d{4}-\d{2}-\d{2})', text)
-                nav_date = date_match.group(1) if date_match else None
-
-                change_match = re.search(r'class="(?:(?:ui-color-red)|(?:ui-color-green))"[^>]*>([+-]?[\d.]+)%', text)
-                change_pct = float(change_match.group(1)) if change_match else None
-
-                return self._normalize_price_payload({
-                    'code': code,
-                    'name': name,
-                    'price': nav,
-                    'nav_date': nav_date,
-                    'change_pct': change_pct,
-                    'currency': 'CNY',
-                    'cny_price': nav,
-                    'source': 'eastmoney'
-                })
-            return None
-
-        except Exception as e:
-            print(f"从东方财富获取基金价格失败 {code}: {e}")
-            return None
+        return FundProvider(self).fetch_from_eastmoney(code)

@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from ..classifier import is_etf, is_otc_fund
 from ..types import PriceRequest, ProviderResult
 
 
@@ -43,7 +44,7 @@ class LegacyRoutingProvider:
     def _fetch_by_legacy_rules(self, code: str, request: PriceRequest) -> Optional[dict]:
         hints = request.hints or {}
 
-        if self.fetcher._is_etf(code):
+        if is_etf(code):
             return self.fetcher._fetch_etf(code)
 
         if code.startswith(("SH", "SZ")) or (
@@ -51,7 +52,7 @@ class LegacyRoutingProvider:
             and len(code) == 6
             and code.startswith(("6", "0", "3", "1", "2"))
         ):
-            is_likely_fund = hints.get("is_fund", False) or self.fetcher._is_otc_fund(code)
+            is_likely_fund = hints.get("is_fund", False) or is_otc_fund(code)
             if is_likely_fund and not hints.get("is_stock", False):
                 return self.fetcher._fetch_fund(code)
             return self.fetcher._fetch_a_stock(code)

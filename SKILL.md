@@ -9,11 +9,15 @@ description: |
 ## 使用边界
 
 - 主入口：`skill_api.py`
+- 日报数据/HTML 唯一入口：`scripts/publish_daily_report.py`
 - 核心 facade：`src/portfolio.py`、`src/price_fetcher.py`
 - 详细架构：`docs/architecture.md`
 - Schema：`docs/schema.md`、`docs/migrations.md`
 
 所有投资数据、价格、净值、收益、现金流结论必须来自脚本执行结果或持久化数据。缺字段、缺基准、口径不一致时，直接说明“当前无法可靠计算”，不要估算。
+`scripts/generate_daily_report_html.py` 仅作 renderer-only，不允许自行拉取 snapshot/report。
+
+Linux 生产部署默认约定：代码从远端仓库同步，真实 `config.json`、`.data/`、`reports/` 放仓外，仓内用软链接引用；不要提交真实配置、缓存或报告产物。若部署流程会重建工作区，必须在部署后重建这些软链接。
 
 ## 常用 API
 
@@ -25,6 +29,7 @@ from skill_api import (
     sell,
     deposit,
     withdraw,
+    sync_futu_cash_mmf,
     record_nav,
     full_report,
 )
@@ -35,6 +40,7 @@ from skill_api import (
 - `buy(code, name, quantity, price, **kwargs)`：记录买入。
 - `sell(code, quantity, price, **kwargs)`：记录卖出。
 - `deposit(amount, **kwargs)` / `withdraw(amount, **kwargs)`：记录出入金。
+- `sync_futu_cash_mmf(dry_run=True)`：通过富途 OpenAPI 同步现金/货基余额到 holdings。
 - `record_nav()`：记录 NAV，并写入 holdings snapshot。
 - `full_report()`：生成完整报告。
 
@@ -46,6 +52,7 @@ from skill_api import (
 src/app/
   asset_name_service.py          # 资产名称查询
   cash_service.py                # 现金持仓副作用
+  futu_balance_sync_service.py   # 富途现金/货基余额同步
   cash_flow_summary_service.py   # 现金流聚合读取
   compensation_service.py        # 跨表写入补偿任务
   nav_baseline_service.py        # NAV 基准读取
@@ -63,6 +70,7 @@ src/domain/
   payload_normalizer.py          # Decimal 与 payload 规范化
 
 src/pricing/
+  classifier.py                  # 行情路由/类型分类
   service.py                     # PriceService：缓存、TTL、fallback
   provider.py                    # PriceProvider 协议
   providers/                     # A/H/US/基金/ETF/legacy provider
@@ -98,6 +106,10 @@ python3 -m pytest \
 
 # Schema 迁移计划
 python3 scripts/migrate_schema.py
+
+# Schema live 检查 / NAV 历史修复
+python3 scripts/migrate_schema.py check-live
+python3 scripts/nav_history_repair.py backfill --account lx --from 2025-01-01 --to 2025-01-31 --dry-run
 ```
 
 部分旧集成测试会实例化真实 `PortfolioSkill()` 并依赖飞书配置；本地无真实配置时，优先跑 touched-area 单测并说明环境限制。

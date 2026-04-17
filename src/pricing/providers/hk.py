@@ -8,6 +8,7 @@ import requests
 
 from src.time_utils import bj_now_naive
 
+from ..payload import normalize_price_payload
 from ..types import PriceRequest, ProviderResult
 
 
@@ -59,7 +60,7 @@ class HKStockProvider:
         if data and len(data) > 45:
             price = float(data[3])
             hkd_cny = self.fetcher._fetch_exchange_rates()["HKDCNY"]
-            return self.fetcher._normalize_price_payload(
+            return normalize_price_payload(
                 {
                     "code": code,
                     "name": data[1],
@@ -96,7 +97,7 @@ class HKStockProvider:
             price = float(data["最新价"]) if pd.notna(data["最新价"]) else 0.0
             hkd_cny = self.fetcher._fetch_exchange_rates()["HKDCNY"]
 
-            return self.fetcher._normalize_price_payload(
+            return normalize_price_payload(
                 {
                     "code": code,
                     "name": data["名称"],

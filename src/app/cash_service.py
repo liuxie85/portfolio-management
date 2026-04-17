@@ -65,6 +65,55 @@ class CashService:
         )
         self.storage.upsert_holding(holding)
 
+    def sync_cash_like_balance(
+        self,
+        *,
+        account: str,
+        asset_id: str,
+        asset_name: str,
+        asset_type: AssetType,
+        target: float,
+        market: str = "",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Sync a cash-like holding to an absolute target balance.
+
+        Use this for broker/API balance sync. Delta-style cash operations should
+        keep using ``update_cash_holding`` / ``add_cash`` / ``deduct_cash``.
+        """
+        target_qty = float(self.quantize_money(target))
+        existing = self.storage.get_holding(asset_id, account, market)
+        current_qty = float(self.quantize_money(existing.quantity if existing else 0))
+        delta = float(self.quantize_money(target_qty - current_qty))
+        created = existing is None
+        updated = bool(created or delta != 0)
+
+        if not dry_run and updated:
+            if existing:
+                self.storage.update_holding_quantity(asset_id, account, delta, market)
+            else:
+                self.storage.upsert_holding(Holding(
+                    asset_id=asset_id,
+                    asset_name=asset_name,
+                    asset_type=asset_type,
+                    account=account,
+                    market=market,
+                    quantity=target_qty,
+                    currency="CNY",
+                    asset_class=AssetClass.CASH,
+                    industry="现金",
+                ))
+
+        return {
+            "asset_id": asset_id,
+            "asset_name": asset_name,
+            "current": current_qty,
+            "target": target_qty,
+            "delta": delta,
+            "created": created,
+            "updated": updated,
+        }
+
     def get_cash_like_holdings(self, account: str):
         cash_holding = self.storage.get_holding(CASH_ASSET_ID, account)
         mmf_holding = self.storage.get_holding(MMF_ASSET_ID, account)

@@ -10,6 +10,13 @@ python scripts/migrate_schema.py
 
 This prints the pending migration plan and does not mutate Feishu.
 
+Other schema checks:
+
+```bash
+python scripts/migrate_schema.py check-live
+python scripts/migrate_schema.py expectations
+```
+
 To mark migrations as applied in local state after the Feishu tables/fields have been created:
 
 ```bash

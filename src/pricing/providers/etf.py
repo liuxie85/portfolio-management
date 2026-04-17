@@ -5,6 +5,8 @@ import re
 import time
 from typing import Optional
 
+from ..classifier import get_exchange_prefix, is_etf
+from ..payload import normalize_price_payload
 from ..types import PriceRequest, ProviderResult
 
 
@@ -15,7 +17,7 @@ class ETFProvider:
         self.fetcher = fetcher
 
     def supports(self, request: PriceRequest) -> bool:
-        return self.fetcher._is_etf(request.normalized_code or request.code)
+        return is_etf(request.normalized_code or request.code)
 
     def fetch_one(self, request: PriceRequest) -> ProviderResult:
         started = time.time()
@@ -31,7 +33,7 @@ class ETFProvider:
 
     def fetch_etf(self, code: str) -> Optional[dict]:
         try:
-            prefix = self.fetcher._get_exchange_prefix(code)
+            prefix = get_exchange_prefix(code)
             query_code = f"{prefix}{code}"
 
             url = f"http://qt.gtimg.cn/q={query_code}"
@@ -47,7 +49,7 @@ class ETFProvider:
             if len(data) <= 45:
                 return None
 
-            return self.fetcher._normalize_price_payload(
+            return normalize_price_payload(
                 {
                     "code": code,
                     "name": data[1],

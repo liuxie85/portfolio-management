@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Bulk recompute + backfill nav_history derived fields.
 
+Compatibility wrapper target: prefer ``scripts/nav_history_repair.py backfill``
+for new automation.
+
 Design:
 - Recompute target dates with existing PortfolioManager.record_nav(...) logic (persist=False)
 - Persist in one/batched call via FeishuStorage.upsert_nav_bulk(...)
@@ -158,7 +161,7 @@ def _build_valuation(account: str, p: BaseNavPoint) -> PortfolioValuation:
     )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Bulk recompute/backfill nav_history derived fields")
     ap.add_argument("--account", default="lx")
     ap.add_argument("--input", help="Input JSON from audit/recompute output")
@@ -169,14 +172,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--apply", action="store_true", help="Actually write to Feishu")
     ap.add_argument("--dry-run", action="store_true", help="Force dry-run (explicit no-write)")
     ap.add_argument("--limit", type=int, default=0, help="Only process first N dates (debug)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     if args.apply and args.dry_run:
         raise ValueError("--apply and --dry-run are mutually exclusive")
     return args
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv=None) -> None:
+    args = parse_args(argv)
     skill = PortfolioSkill(account=args.account)
 
     # Build base points

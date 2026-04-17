@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
@@ -9,8 +11,6 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from skill_api import PortfolioSkill
 
 PUBLIC_DIR = REPO_ROOT / "public"
 OUTPUT_PATH = PUBLIC_DIR / "index.html"
@@ -232,28 +232,33 @@ def render_html(bundle: Dict[str, Any]) -> str:
 """
 
 
-def main() -> None:
-    skill = PortfolioSkill()
-    snapshot = skill.build_snapshot()
-    navs = skill.storage.get_nav_history(skill.account, days=9999)
-    full = skill.full_report(snapshot=snapshot, navs=navs)
-    if not full.get("success"):
-        raise RuntimeError(full.get("error") or "full_report failed")
-
-    report = skill.generate_report(
-        report_type="daily",
-        record_nav=False,
-        snapshot=snapshot,
-        navs=navs,
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Renderer-only daily report HTML generator. Data must come from scripts/publish_daily_report.py."
     )
-    if not report.get("success"):
-        raise RuntimeError(report.get("error") or "generate_report(daily) failed")
+    parser.add_argument("--bundle", required=True, help="JSON bundle path produced by publish_daily_report.py or compatible caller.")
+    parser.add_argument("--output", default=str(OUTPUT_PATH), help="HTML output path.")
+    return parser.parse_args()
 
-    html = render_html({"snapshot": snapshot, "full": full, "report": report})
 
-    PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(html, encoding="utf-8")
-    print(str(OUTPUT_PATH))
+def load_bundle(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        bundle = json.load(f)
+    missing = [key for key in ("snapshot", "report") if key not in bundle]
+    if missing:
+        raise ValueError(f"bundle missing required keys: {', '.join(missing)}")
+    bundle.setdefault("full", {})
+    return bundle
+
+
+def main() -> None:
+    args = parse_args()
+    html = render_html(load_bundle(args.bundle))
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(html, encoding="utf-8")
+    print(str(output))
 
 
 if __name__ == "__main__":

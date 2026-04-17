@@ -43,6 +43,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-publish", action="store_true", help="Do not write HTML files into reports/publish dirs.")
     parser.add_argument("--quiet", action="store_true", help="No stdout on success (scheduled mode).")
     parser.add_argument("--debug-internal", action="store_true", help="Do not suppress internal stdout prints (debug only).")
+    parser.add_argument(
+        "--sync-futu-cash-mmf",
+        action="store_true",
+        default=os.environ.get("PM_SYNC_FUTU_CASH_MMF") in ("1", "true", "TRUE", "yes", "YES"),
+        help="Sync Futu cash/MMF balances into holdings before building the report snapshot.",
+    )
+    parser.add_argument(
+        "--sync-futu-dry-run",
+        action="store_true",
+        default=os.environ.get("PM_SYNC_FUTU_DRY_RUN") in ("1", "true", "TRUE", "yes", "YES"),
+        help="Preview Futu cash/MMF sync without writing holdings.",
+    )
     return parser.parse_args()
 
 
@@ -113,7 +125,13 @@ def type_label(v: str) -> str:
     }.get(v, v or "--")
 
 
-def build_report_data(price_timeout: int, dry_run: bool = False, use_bulk_nav_upsert: bool = False) -> dict[str, Any]:
+def build_report_data(
+    price_timeout: int,
+    dry_run: bool = False,
+    use_bulk_nav_upsert: bool = False,
+    sync_futu_cash_mmf: bool = False,
+    sync_futu_dry_run: bool = False,
+) -> dict[str, Any]:
     """Build a consistent bundle for publishing.
 
     Performance notes:
@@ -129,6 +147,12 @@ def build_report_data(price_timeout: int, dry_run: bool = False, use_bulk_nav_up
         return int(time.time()*1000)
 
     skill = _get_default_skill()
+
+    futu_sync_result = None
+    if sync_futu_cash_mmf:
+        futu_sync_result = skill.sync_futu_cash_mmf(dry_run=sync_futu_dry_run)
+        if not futu_sync_result.get("success"):
+            raise RuntimeError(json.dumps(futu_sync_result, ensure_ascii=False))
 
     t_snapshot = _ms()
     snapshot = skill.build_snapshot()
@@ -193,6 +217,7 @@ def build_report_data(price_timeout: int, dry_run: bool = False, use_bulk_nav_up
         raise RuntimeError(json.dumps(nav_snapshot, ensure_ascii=False))
 
     return {
+        "snapshot": snapshot,
         "nav_result": nav_result,
         "report": report,
         "nav_snapshot": nav_snapshot,
@@ -203,6 +228,7 @@ def build_report_data(price_timeout: int, dry_run: bool = False, use_bulk_nav_up
             "generate_report_ms": report_ms,
             "get_nav_ms": get_nav_ms,
         },
+        "futu_sync_result": futu_sync_result,
     }
 
 
@@ -248,6 +274,8 @@ def publish_report(report_date: str, html: str, config: PublishConfig) -> dict[s
     report_path = config.reports_dir / f"{slug}.html"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(html, encoding="utf-8")
+    latest_path = config.reports_dir / "latest.html"
+    latest_path.write_text(html, encoding="utf-8")
 
     out_dir = config.publish_root / slug
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -258,6 +286,7 @@ def publish_report(report_date: str, html: str, config: PublishConfig) -> dict[s
         "date": report_date,
         "slug": slug,
         "report_file": str(report_path),
+        "latest_file": str(latest_path),
         "publish_dir": str(out_dir),
         "public_url": public_url,
     }
@@ -286,6 +315,8 @@ def main() -> None:
             price_timeout=args.price_timeout,
             dry_run=args.dry_run,
             use_bulk_nav_upsert=bool(args.use_bulk_nav_upsert),
+            sync_futu_cash_mmf=bool(args.sync_futu_cash_mmf),
+            sync_futu_dry_run=bool(args.sync_futu_dry_run),
         )
         timings['build_report_data_ms'] = _now_ms() - t1
 
@@ -298,6 +329,7 @@ def main() -> None:
                 "report": report_bundle.get("report"),
                 "nav_snapshot": report_bundle.get("nav_snapshot"),
                 "stage_timings": report_bundle.get("stage_timings"),
+                "futu_sync_result": report_bundle.get("futu_sync_result"),
                 "timings": timings,
             }
             if not bool(args.quiet):
@@ -320,6 +352,7 @@ def main() -> None:
             "success": True,
             "date": report_date,
             "nav_result": report_bundle["nav_result"],
+            "futu_sync_result": report_bundle.get("futu_sync_result"),
             "publish": publish_result,
             "timings": timings,
         }

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Patch Feishu nav_history safely (merge + validate + dry-run).
 
+Compatibility wrapper target: prefer ``scripts/nav_history_repair.py patch``
+for new automation.
+
 Design goals
 - Never overwrite non-target fields with model defaults (e.g., cash_value/stock_value becoming 0).
 - Two-phase workflow: dry-run diff -> apply.
@@ -294,7 +297,7 @@ def validate_math(
     return errs
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--account", default=None)
     ap.add_argument("--patch-file", required=True)
@@ -314,7 +317,7 @@ def main():
             "all: validate the entire series."
         ),
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not args.dry_run and not args.apply:
         raise SystemExit("must pass --dry-run or --apply")

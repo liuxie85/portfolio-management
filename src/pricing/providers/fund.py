@@ -5,6 +5,8 @@ import re
 import time
 from typing import Optional
 
+from ..classifier import is_otc_fund
+from ..payload import normalize_price_payload
 from ..types import PriceRequest, ProviderResult
 
 
@@ -17,7 +19,7 @@ class FundProvider:
     def supports(self, request: PriceRequest) -> bool:
         code = request.normalized_code or request.code
         hints = request.hints or {}
-        return bool(hints.get("is_fund", False) or self.fetcher._is_otc_fund(code))
+        return bool(hints.get("is_fund", False) or is_otc_fund(code))
 
     def fetch_one(self, request: PriceRequest) -> ProviderResult:
         started = time.time()
@@ -61,7 +63,7 @@ class FundProvider:
                         except Exception:
                             pass
 
-                        return self.fetcher._normalize_price_payload(
+                        return normalize_price_payload(
                             {
                                 "code": code,
                                 "name": name,
@@ -90,7 +92,7 @@ class FundProvider:
 
                     nav = float(row["单位净值"]) if pd.notna(row["单位净值"]) else None
                     if nav and nav > 0:
-                        return self.fetcher._normalize_price_payload(
+                        return normalize_price_payload(
                             {
                                 "code": code,
                                 "name": row.get("基金简称"),
@@ -147,7 +149,7 @@ class FundProvider:
         if not nav or nav <= 0:
             return None
 
-        return self.fetcher._normalize_price_payload(
+        return normalize_price_payload(
             {
                 "code": code,
                 "name": parts[1],
@@ -175,7 +177,7 @@ class FundProvider:
             nav = float(nav_match.group(1))
             date_match = re.search(r"(\d{4}-\d{2}-\d{2})", text)
             change_match = re.search(r'class="(?:(?:ui-color-red)|(?:ui-color-green))"[^>]*>([+-]?[\d.]+)%', text)
-            return self.fetcher._normalize_price_payload(
+            return normalize_price_payload(
                 {
                     "code": code,
                     "name": name,

@@ -8,7 +8,28 @@ from skill_api import PortfolioSkill
 
 
 def test_full_report_top_holdings_merge_duplicates_and_cash_mmf_bucket():
-    skill = PortfolioSkill(account="lx")
+    skill = PortfolioSkill.__new__(PortfolioSkill)
+    skill.account = "lx"
+    skill.storage = SimpleNamespace(get_nav_history=lambda *args, **kwargs: [])
+    skill.portfolio = SimpleNamespace(
+        _find_latest_nav_before=lambda *args, **kwargs: None,
+        _find_year_end_nav=lambda *args, **kwargs: None,
+        _find_prev_month_end_nav=lambda *args, **kwargs: None,
+        _get_daily_cash_flow=lambda *args, **kwargs: 0.0,
+        _get_monthly_cash_flow=lambda *args, **kwargs: 0.0,
+        _get_yearly_cash_flow=lambda *args, **kwargs: 0.0,
+        _get_period_cash_flow=lambda *args, **kwargs: 0.0,
+        _calc_mtd_nav_change=lambda *args, **kwargs: None,
+        _calc_ytd_nav_change=lambda *args, **kwargs: None,
+        _calc_mtd_pnl=lambda *args, **kwargs: None,
+        _calc_ytd_pnl=lambda *args, **kwargs: None,
+        reporting_service=SimpleNamespace(
+            build_distribution=lambda snapshot: {
+                "success": True,
+                "by_type": [],
+            }
+        ),
+    )
 
     holdings = [
         {"code": "AAPL", "name": "Apple", "quantity": 1, "type": "us_stock", "normalized_type": "stock", "market": "futu", "currency": "USD", "market_value": 100.0},

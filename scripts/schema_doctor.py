@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Schema doctor for Feishu Bitable tables.
 
+Compatibility helper: prefer ``scripts/migrate_schema.py check-live`` for new
+automation.
+
 Purpose:
 - Detect missing/renamed fields early (FieldNameNotFound is a top source of runtime failures)
 - Compare live Bitable schema with docs/schema.md (canonical expected fields)
@@ -100,7 +103,27 @@ def parse_docs_schema(path: Path) -> Dict[str, TableSpec]:
 
 def main() -> None:
     args = parse_args()
+    report = run_schema_check(strict=False)
 
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        for t, r in report["tables"].items():
+            if not r.get("configured", True):
+                print(f"[SKIP] {t} (not configured) — {r.get('error')}")
+                continue
+            status = "OK" if r.get("ok") else "MISSING"
+            print(f"[{status}] {t} ({r.get('app_token')}/{r.get('table_id')})")
+            if r.get("missing_required"):
+                print("  missing_required:", ", ".join(r["missing_required"]))
+        if report["ok"]:
+            print("\nALL_OK")
+
+    if args.strict and not report["ok"]:
+        raise SystemExit(2)
+
+
+def run_schema_check(strict: bool = False) -> Dict[str, Any]:
     from src.feishu_client import FeishuClient
 
     if not DOCS_SCHEMA.exists():
@@ -152,22 +175,9 @@ def main() -> None:
         if not ok:
             report["ok"] = False
 
-    if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-    else:
-        for t, r in report["tables"].items():
-            if not r.get("configured", True):
-                print(f"[SKIP] {t} (not configured) — {r.get('error')}")
-                continue
-            status = "OK" if r.get("ok") else "MISSING"
-            print(f"[{status}] {t} ({r.get('app_token')}/{r.get('table_id')})")
-            if r.get("missing_required"):
-                print("  missing_required:", ", ".join(r["missing_required"]))
-        if report["ok"]:
-            print("\nALL_OK")
-
-    if args.strict and not report["ok"]:
+    if strict and not report["ok"]:
         raise SystemExit(2)
+    return report
 
 
 if __name__ == "__main__":

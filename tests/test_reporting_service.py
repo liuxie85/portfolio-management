@@ -108,3 +108,64 @@ def test_portfolio_distribution_methods_delegate_to_reporting_service():
     assert manager.get_industry_distribution("a") == {"其他": 1.0}
     manager.reporting_service.get_asset_distribution.assert_called_once_with("a")
     manager.reporting_service.get_industry_distribution.assert_called_once_with("a")
+
+
+def test_reporting_service_build_position_uses_valuation():
+    storage = Mock()
+    manager = Mock()
+    service = ReportingService(manager=manager, storage=storage)
+    valuation = PortfolioValuation(
+        account="a",
+        total_value_cny=200.0,
+        cash_value_cny=50.0,
+        stock_value_cny=100.0,
+        fund_value_cny=50.0,
+    )
+
+    result = service.build_position({"valuation": valuation})
+
+    assert result == {
+        "success": True,
+        "total_value": 200.0,
+        "stock_value": 100.0,
+        "fund_value": 50.0,
+        "cash_value": 50.0,
+        "stock_ratio": 0.5,
+        "fund_ratio": 0.25,
+        "cash_ratio": 0.25,
+    }
+
+
+def test_reporting_service_build_distribution_uses_snapshot_holdings():
+    storage = Mock()
+    manager = Mock()
+    service = ReportingService(manager=manager, storage=storage)
+    valuation = PortfolioValuation(account="a", total_value_cny=300.0)
+    snapshot = {
+        "valuation": valuation,
+        "holdings_data": {
+            "holdings": [
+                {"code": "AAPL", "normalized_type": "stock", "market": "富途", "currency": "USD", "market_value": 100.0},
+                {"code": "CNY-MMF", "normalized_type": "cash", "market": "富途", "currency": "CNY", "market_value": 50.0},
+                {"code": "110022", "normalized_type": "fund", "market": "平安", "currency": "CNY", "market_value": 150.0},
+            ],
+        },
+    }
+
+    result = service.build_distribution(snapshot)
+
+    assert result["success"] is True
+    assert result["total_value"] == 300.0
+    assert result["by_type"] == [
+        {"type": "fund", "value": 150.0, "ratio": 0.5},
+        {"type": "stock", "value": 100.0, "ratio": 1 / 3},
+        {"type": "cash", "value": 50.0, "ratio": 1 / 6},
+    ]
+    assert result["by_market"] == [
+        {"market": "富途", "value": 150.0, "ratio": 0.5},
+        {"market": "平安", "value": 150.0, "ratio": 0.5},
+    ]
+    assert result["by_currency"] == [
+        {"currency": "CNY", "value": 200.0, "ratio": 2 / 3},
+        {"currency": "USD", "value": 100.0, "ratio": 1 / 3},
+    ]

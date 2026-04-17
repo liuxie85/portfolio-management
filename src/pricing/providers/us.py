@@ -6,6 +6,7 @@ from typing import Optional
 
 from src import config as _config
 
+from ..payload import normalize_price_payload
 from ..types import PriceRequest, ProviderResult
 
 
@@ -64,7 +65,7 @@ class USStockProvider:
                 change_pct = (change / prev_close * 100) if prev_close else 0
 
                 usd_cny = self.fetcher._fetch_exchange_rates()["USDCNY"]
-                return self.fetcher._normalize_price_payload(
+                return normalize_price_payload(
                     {
                         "code": code,
                         "name": info.get("shortName", yf_code),
@@ -109,7 +110,7 @@ class USStockProvider:
         change_pct = data.get("dp", (change / prev_close * 100) if prev_close else 0)
         usd_cny = self.fetcher._fetch_exchange_rates()["USDCNY"]
 
-        return self.fetcher._normalize_price_payload(
+        return normalize_price_payload(
             {
                 "code": code,
                 "name": code,
@@ -176,7 +177,7 @@ class USStockProvider:
         valid_volumes = [v for v in volumes if v is not None]
 
         usd_cny = self.fetcher._fetch_exchange_rates()["USDCNY"]
-        return self.fetcher._normalize_price_payload(
+        return normalize_price_payload(
             {
                 "code": code,
                 "name": meta.get("shortName") or meta.get("longName") or meta.get("symbol"),

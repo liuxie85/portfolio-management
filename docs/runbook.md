@@ -23,14 +23,15 @@ python scripts/pm.py cash --json
 python scripts/pm.py nav
 python scripts/pm.py nav --json
 
-# 查日报（只生成报告，不写 nav_history；如需更快/更稳可调 timeout）
-python scripts/pm.py report daily
-python scripts/pm.py report daily --timeout 25 --json
+# 预览日报数据（只读，不是正式日报入口；如需更快/更稳可调 timeout）
+python scripts/pm.py report daily --preview
+python scripts/pm.py report daily --preview --timeout 25 --json
 ```
 
 说明：
 - `--json` 适合做自动化/二次处理；默认输出对人更友好。
 - CLI 目前仅暴露只读命令；涉及写入的动作（如 `record_nav/close_nav`）仍需走显式 confirm 语义。
+- 正式日报数据/HTML/发布入口只有 `scripts/publish_daily_report.py`；`pm report` 仅作 preview。
 
 ## 清仓 / 关闭账户：写入 shares=0 的净值点（close_nav）
 
@@ -78,4 +79,4 @@ python scripts/pm.py report daily --timeout 25 --json
 ## 5) Feishu field not found
 
 - Compare actual Bitable fields with `docs/schema.md`.
-- (Planned) use `scripts/schema_doctor.py`.
+- Use `python scripts/migrate_schema.py check-live`.

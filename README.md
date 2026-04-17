@@ -32,12 +32,29 @@ cp config.example.json config.json
 - `FEISHU_TABLE_COMPENSATION_TASKS`
 - `FEISHU_TABLE_SCHEMA_VERSION`
 
+## Linux 部署约定
+
+生产主机建议只从远端仓库同步代码，真实配置和运行数据放在仓外，仓内用软链接引用：
+
+```bash
+mkdir -p /opt/portfolio-management/config
+mkdir -p /var/lib/portfolio-management/.data
+mkdir -p /var/lib/portfolio-management/reports
+
+ln -s /opt/portfolio-management/config/config.json ./config.json
+ln -s /var/lib/portfolio-management/.data ./.data
+ln -s /var/lib/portfolio-management/reports ./reports
+```
+
+`config.json`、`.data/`、`reports/` 已被 `.gitignore` 忽略。若部署工具会清理未跟踪文件（如 `rsync --delete`、重建工作区），部署后需要重新创建这些软链接。
+
 ## 常用调用
 
 ```python
-from skill_api import buy, sell, deposit, withdraw, get_holdings, full_report, record_nav
+from skill_api import buy, sell, deposit, withdraw, get_holdings, full_report, record_nav, sync_futu_cash_mmf
 
 get_holdings(include_price=True, group_by_market=True)
+sync_futu_cash_mmf(dry_run=True)
 record_nav()
 full_report()
 buy("600519", "贵州茅台", 100, 1800, market="平安证券")
@@ -46,11 +63,13 @@ deposit(50000, remark="入金")
 withdraw(10000, remark="出金")
 ```
 
+日报数据与 HTML 统一从 `scripts/publish_daily_report.py` 生成；`scripts/generate_daily_report_html.py` 仅负责渲染已准备好的 bundle。
+
 ## 当前结构
 
 ```text
 src/
-├── app/                  # 应用服务：交易、现金、估值、NAV、快照、报表、补偿
+├── app/                  # 应用服务：交易、现金、富途余额同步、估值、NAV、快照、报表、补偿
 ├── domain/               # 纯计算：NAV 公式、历史索引、payload 规范化
 ├── pricing/              # 行情插件化：PriceService + Provider
 ├── migrations/           # Schema 版本化迁移登记
@@ -83,8 +102,15 @@ python3 -X pycache_prefix=/tmp/pm_pycache -m compileall src
 # Schema 迁移计划，只打印不写飞书
 python3 scripts/migrate_schema.py
 
+# Schema live 检查 / code-side expectations
+python3 scripts/migrate_schema.py check-live
+python3 scripts/migrate_schema.py expectations
+
 # 标记迁移已应用到本地状态
 python3 scripts/migrate_schema.py --apply
+
+# NAV 历史修复统一入口
+python3 scripts/nav_history_repair.py backfill --account lx --from 2025-01-01 --to 2025-01-31 --dry-run
 ```
 
 ## 文档索引

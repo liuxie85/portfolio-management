@@ -16,7 +16,7 @@ flowchart TB
         SkillAPI["skill_api.py<br/>PortfolioSkill<br/>统一 API / 参数适配 / 报告编排"]
         CLI["scripts/pm.py<br/>只读命令行入口"]
         Publish["scripts/publish_daily_report.py<br/>记录 NAV + 生成 HTML + 发布"]
-        Doctor["scripts/doctor.py / schema_doctor.py<br/>环境与 Schema 诊断"]
+        Doctor["scripts/doctor.py / migrate_schema.py<br/>环境与 Schema 诊断"]
     end
 
     subgraph Domain["领域层"]
@@ -127,7 +127,7 @@ flowchart TB
 
 5. **可审计性高**
    - `holdings_snapshot` 表让每一天的 NAV 都可复现。
-   - 配套 `audit_*.py`、`doctor.py`、`schema_doctor.py` 脚本，可对历史 NAV、Schema、行情行为进行巡检。
+   - 配套 `audit_*.py`、`doctor.py`、`migrate_schema.py` 脚本，可对历史 NAV、Schema、行情行为进行巡检。
 
 6. **时区处理正确**
    - 业务日期集中使用北京时间语义（`src/time_utils.py`），降低 UTC 跨日导致的净值日期错位风险。
@@ -147,8 +147,8 @@ flowchart TB
    - 建议：优先拆分报告编排、NAV 计算、现金流聚合、行情 Provider、Feishu 表映射。
 
 3. **PriceFetcher 复杂度高**
-   - 多源回退（腾讯 / yfinance / Finnhub / AKShare / East Money）、并发线程、市场时间感知 TTL、汇率接口等逻辑交织在一起。
-   - 建议：将各数据源拆分为独立 `PriceProvider`，由统一 `PriceService` 处理缓存、TTL、fallback 和诊断元数据。
+   - 多源回退（腾讯 / yfinance / Finnhub / AKShare / East Money）、并发线程、市场时间感知 TTL、汇率接口等逻辑仍较多。
+   - 已迁出行情分类到 `src/pricing/classifier.py`，建议继续把汇率和各数据源实现拆成独立 `PriceProvider`。
 
 4. **缺少依赖注入**
    - `PortfolioManager` 已支持注入 `storage` 和 `price_fetcher`，但 `PortfolioSkill` 仍主要直接创建 `create_storage()` 和 `PriceFetcher`。
@@ -193,7 +193,7 @@ flowchart TB
 
 ### P2：Schema 与测试
 
-1. 为 `docs/schema.md` 增加 schema version，并让 `schema_doctor.py` 输出版本兼容性。
+1. 为 `docs/schema.md` 增加 schema version，并让 `migrate_schema.py check-live` 输出版本兼容性。
 2. 增加迁移目录，例如 `migrations/feishu/001_add_xxx.md`，记录每次字段变更和手工操作。
 3. 给 `PortfolioSkill` 增加依赖注入后，补充无网络单元测试，覆盖报告、NAV 和写入 guard。
 4. 增加端到端 dry-run 测试：从交易输入到估值快照、NAV 预览、日报 bundle。

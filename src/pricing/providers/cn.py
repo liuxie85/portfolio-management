@@ -8,6 +8,8 @@ import requests
 
 from src.time_utils import bj_now_naive
 
+from ..classifier import is_otc_fund
+from ..payload import normalize_price_payload
 from ..types import PriceRequest, ProviderResult
 
 
@@ -29,7 +31,7 @@ class CNStockProvider:
         ):
             return False
         hints = request.hints or {}
-        is_likely_fund = hints.get("is_fund", False) or self.fetcher._is_otc_fund(code)
+        is_likely_fund = hints.get("is_fund", False) or is_otc_fund(code)
         return not (is_likely_fund and not hints.get("is_stock", False))
 
     def fetch_one(self, request: PriceRequest) -> ProviderResult:
@@ -73,7 +75,7 @@ class CNStockProvider:
         parts_map, _meta = tencent_fetch_batch(self.fetcher.session, [query_code], timeout=5, chunk_size=1)
         data = parts_map.get(query_code)
         if data and len(data) > 45:
-            return self.fetcher._normalize_price_payload(
+            return normalize_price_payload(
                 {
                     "code": code,
                     "name": data[1],
@@ -106,7 +108,7 @@ class CNStockProvider:
                 return None
 
             data = row.iloc[0]
-            return self.fetcher._normalize_price_payload(
+            return normalize_price_payload(
                 {
                     "code": code,
                     "name": data["名称"],

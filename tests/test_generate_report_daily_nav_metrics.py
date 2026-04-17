@@ -6,7 +6,7 @@ from skill_api import PortfolioSkill
 
 class TestGenerateReportDailyNavMetrics(unittest.TestCase):
     def test_generate_report_daily_includes_nav_metrics_backward_compatible(self):
-        skill = PortfolioSkill(account='lx')
+        skill = PortfolioSkill.__new__(PortfolioSkill)
         snapshot = {
             'snapshot_time': '2026-03-29T08:00:00',
             'overview': {},

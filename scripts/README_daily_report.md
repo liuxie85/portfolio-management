@@ -1,6 +1,7 @@
 # Daily report publisher
 
 `publish_daily_report.py` records the current NAV, renders the daily HTML report, and publishes it into a static directory.
+It is the only entry point that may collect daily-report data. `generate_daily_report_html.py` is renderer-only and must receive a prepared JSON bundle.
 
 ## What it does
 
@@ -10,6 +11,7 @@
 4. Render HTML
 5. Write the HTML into:
    - `reports/investment-daily-YYYY-MM-DD.html`
+   - `reports/latest.html`
    - `<publish-root>/investment-daily-YYYY-MM-DD/index.html`
 
 ## Usage
@@ -42,3 +44,4 @@ python scripts/publish_daily_report.py \
   - data collection: `build_report_data(...)`
   - HTML rendering: `render_daily_report_html(...)`
   - file publishing: `publish_report(...)`
+- Legacy HTML helpers must not instantiate `PortfolioSkill` or call `build_snapshot()` / `generate_report()` directly.

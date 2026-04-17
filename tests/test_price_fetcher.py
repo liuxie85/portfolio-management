@@ -7,6 +7,8 @@ import pytz
 from src.price_fetcher import MarketTimeUtil, PriceFetcher
 from src.asset_utils import detect_market_type
 from src.models import AssetType, PriceCache
+from src.pricing.providers.cn import CNStockProvider
+from src.pricing.providers.hk import HKStockProvider
 
 
 class TestMarketTimeUtil:
@@ -142,7 +144,7 @@ class TestPriceCache:
 class TestPriceFetcher:
     """测试价格获取器"""
 
-    @patch.object(PriceFetcher, '_fetch_a_stock_from_tencent')
+    @patch.object(CNStockProvider, 'fetch_from_tencent')
     def test_fetch_a_stock_success(self, mock_tencent):
         """测试获取A股价格成功"""
         mock_tencent.return_value = {
@@ -164,8 +166,8 @@ class TestPriceFetcher:
         assert result["change_pct"] == 0.0244
         assert result["currency"] == "CNY"
 
-    @patch.object(PriceFetcher, '_fetch_a_stock_from_tencent')
-    @patch.object(PriceFetcher, '_fetch_a_stock_from_akshare')
+    @patch.object(CNStockProvider, 'fetch_from_tencent')
+    @patch.object(CNStockProvider, 'fetch_from_akshare')
     def test_fetch_a_stock_failure(self, mock_akshare, mock_tencent):
         """测试获取A股价格失败"""
         mock_tencent.return_value = None
@@ -176,7 +178,7 @@ class TestPriceFetcher:
 
         assert result is None
 
-    @patch.object(PriceFetcher, '_fetch_hk_stock_from_tencent')
+    @patch.object(HKStockProvider, 'fetch_from_tencent')
     def test_fetch_hk_stock_success(self, mock_tencent):
         """测试获取港股价格成功"""
         mock_tencent.return_value = {

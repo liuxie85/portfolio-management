@@ -12,11 +12,13 @@ Usage examples:
   python scripts/pm.py holdings
   python scripts/pm.py holdings --include-price --timeout 25
   python scripts/pm.py nav
-  python scripts/pm.py report daily
-  python scripts/pm.py report daily --timeout 25 --json
+  python scripts/pm.py report daily --preview
+  python scripts/pm.py report daily --preview --timeout 25 --json
 
 Safety:
 - This CLI intentionally does NOT expose write paths by default.
+- `report` is preview-only. Official daily data/HTML publishing must use
+  `scripts/publish_daily_report.py`.
 """
 
 from __future__ import annotations
@@ -25,7 +27,6 @@ import argparse
 import contextlib
 import os
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -74,9 +75,18 @@ def cmd_nav(args):
 
 
 def cmd_report(args):
+    if not bool(args.preview):
+        raise SystemExit(
+            "pm report is preview-only. Re-run with --preview, or use "
+            "scripts/publish_daily_report.py for the official daily report."
+        )
+
     from skill_api import generate_report
 
     res = generate_report(report_type=args.type, record_nav=False, price_timeout=args.timeout)
+    if isinstance(res, dict):
+        res.setdefault("preview_only", True)
+        res.setdefault("canonical_entrypoint", "scripts/publish_daily_report.py")
     _dump(res, args.json)
 
 
@@ -104,8 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_nav.add_argument("--json", action="store_true", help="output JSON")
     p_nav.set_defaults(func=cmd_nav)
 
-    p_rep = sp.add_parser("report", help="generate report (read-only)")
+    p_rep = sp.add_parser("report", help="preview report data (read-only; not the official daily entry)")
     p_rep.add_argument("type", choices=["daily", "monthly", "yearly"], help="report type")
+    p_rep.add_argument("--preview", action="store_true", help="acknowledge this command is preview-only")
     p_rep.add_argument("--timeout", type=int, default=30, help="price timeout seconds (default 30)")
     p_rep.add_argument("--json", action="store_true", help="output JSON")
     p_rep.set_defaults(func=cmd_report)

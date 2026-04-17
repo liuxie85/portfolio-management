@@ -5,7 +5,7 @@
 ## 0) Repo / 入口
 - repo：`/home/node/.openclaw/workspace/portfolio-management`
 - 定时任务入口：`scripts/publish_daily_report.py`
-- CLI（只读查询为主）：`scripts/pm.py`
+- CLI（只读查询为主）：`scripts/pm.py`；`pm report` 仅作 preview
 
 ---
 
