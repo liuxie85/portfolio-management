@@ -44,7 +44,7 @@ class FeishuClient:
         # 方式1（统一base）：FEISHU_APP_TOKEN=bascnxxx + FEISHU_TABLE_HOLDINGS=tblxxx
         # 方式2（分表base）：FEISHU_TABLE_HOLDINGS=bascnxxx/tblxxx
         self.table_configs = {}
-        for table_name in ['holdings', 'transactions', 'price_cache', 'nav_history', 'cash_flow', 'holdings_snapshot']:
+        for table_name in ['holdings', 'transactions', 'price_cache', 'nav_history', 'cash_flow', 'holdings_snapshot', 'compensation_tasks', 'schema_version']:
             value = config.get(f"feishu.tables.{table_name}")
             if value:
                 if '/' in value:

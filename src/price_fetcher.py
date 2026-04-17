@@ -27,6 +27,7 @@ from pathlib import Path
 from .market_time import MarketTimeUtil
 from .asset_utils import detect_market_type as _detect_market_type_func
 from . import config as _config
+from .pricing import PriceRequest, PriceService
 
 
 # 汇率缓存文件路径（使用项目相对路径）
@@ -123,6 +124,8 @@ class PriceFetcher:
         self._rate_cache_time = None
         # last-batch meta for observability
         self._last_tencent_batch_meta = None
+        self.price_service = PriceService.for_legacy_fetcher(self)
+        self._last_price_service_diagnostics = []
 
     def fetch(
         self,
@@ -1014,29 +1017,16 @@ class PriceFetcher:
         name_hints = self._get_type_hints_from_name(asset_name)
 
         # 根据名称辅助判断并补全代码前缀
-        code = self._normalize_code_with_name(code, asset_name)
-
-        # 1. ETF/场内基金
-        if self._is_etf(code):
-            return self._fetch_etf(code)
-
-        # 2. A股和场外基金
-        elif code.startswith(('SH', 'SZ')) or (code.isdigit() and len(code) == 6 and
-                                              (code.startswith('6') or code.startswith('0') or
-                                               code.startswith('3') or code.startswith('1') or
-                                               code.startswith('2'))):
-            is_likely_fund = name_hints.get('is_fund', False) or self._is_otc_fund(code)
-            if is_likely_fund and not name_hints.get('is_stock', False):
-                return self._fetch_fund(code)
-            return self._fetch_a_stock(code)
-
-        # 3. 港股
-        elif code.startswith('HK') or (code.isdigit() and 4 <= len(code) <= 5):
-            return self._fetch_hk_stock(code)
-
-        # 4. 美股
-        else:
-            return self._fetch_us_stock(code)
+        normalized_code = self._normalize_code_with_name(code, asset_name)
+        request = PriceRequest(
+            code=code,
+            asset_name=asset_name or "",
+            normalized_code=normalized_code,
+            hints=name_hints,
+        )
+        result = self.price_service.fetch_realtime(request)
+        self._last_price_service_diagnostics = list(self.price_service.last_diagnostics)
+        return result
 
     def _normalize_code_with_name(self, code: str, name: str) -> str:
         """根据资产名称给代码添加交易所前缀"""

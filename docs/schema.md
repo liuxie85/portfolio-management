@@ -1,5 +1,7 @@
 # Feishu Bitable Schema (truth source)
 
+Schema version: `0003_schema_version`
+
 This doc defines the canonical field names expected by the code.
 Field **names must match exactly** (case-sensitive, underscore-sensitive).
 
@@ -94,3 +96,29 @@ Required fields:
 - `cny_price` (number)
 - `market_value_cny` (number)
 - `dedup_key` (text)
+
+### compensation_tasks
+
+Optional but recommended. Used for repairable partial multi-table writes.
+
+Required fields:
+- `task_id` (text)
+- `operation_type` (text/select)
+- `account` (text)
+- `status` (text/select)
+- `payload` (text)
+- `error` (text)
+- `related_record_id` (text)
+- `retry_count` (number)
+- `created_at` (text/datetime)
+- `updated_at` (text/datetime)
+
+### schema_version
+
+Optional but recommended. Used to track applied schema migrations.
+
+Required fields:
+- `migration_id` (text)
+- `description` (text)
+- `applied_at` (text/datetime)
+- `status` (text/select)

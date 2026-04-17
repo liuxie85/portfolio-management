@@ -25,6 +25,7 @@ Keep docs short, executable, and reality-checked.
 ## Schema truth source
 
 - Feishu Bitable schema reference (fields/names/types): `docs/schema.md`
+- Schema migration notes: `docs/migrations.md`
 
 ## Non-negotiable invariants
 

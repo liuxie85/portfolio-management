@@ -4,6 +4,7 @@
 """
 import json
 import re
+from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Dict, Any
@@ -945,6 +946,30 @@ class FeishuStorage:
             self._cash_flow_agg_loaded_accounts.clear()
             self._cash_flow_agg_mem_cache.clear()
         return ok
+
+    def add_compensation_task(self, task) -> Any:
+        """持久化补偿任务（可选表）。
+
+        如果 Feishu 表未配置或字段不完整，上层 CompensationService 会自动
+        fallback 到本地 JSONL 队列，不影响原业务路径。
+        """
+        if is_dataclass(task):
+            fields = asdict(task)
+        elif hasattr(task, "model_dump"):
+            fields = task.model_dump(mode="json")
+        else:
+            fields = dict(task)
+
+        payload = dict(fields)
+        if isinstance(payload.get("payload"), (dict, list)):
+            payload["payload"] = json.dumps(payload["payload"], ensure_ascii=False, sort_keys=True)
+        result = self.client.create_record('compensation_tasks', payload)
+        record_id = result.get('record_id')
+        if isinstance(task, dict):
+            task['record_id'] = record_id
+        else:
+            setattr(task, 'record_id', record_id)
+        return task
 
     def delete_nav_by_record_id(self, record_id: str) -> bool:
         """通过记录ID删除净值记录"""

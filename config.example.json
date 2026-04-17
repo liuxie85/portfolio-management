@@ -16,7 +16,9 @@
       "transactions": "",
       "nav_history": "",
       "cash_flow": "",
-      "holdings_snapshot": ""
+      "holdings_snapshot": "",
+      "compensation_tasks": "",
+      "schema_version": ""
     }
   }
 }

@@ -67,6 +67,8 @@ def get(key: str, default=None):
         "feishu.tables.nav_history": "FEISHU_TABLE_NAV_HISTORY",
         "feishu.tables.cash_flow": "FEISHU_TABLE_CASH_FLOW",
         "feishu.tables.holdings_snapshot": "FEISHU_TABLE_HOLDINGS_SNAPSHOT",
+        "feishu.tables.compensation_tasks": "FEISHU_TABLE_COMPENSATION_TASKS",
+        "feishu.tables.schema_version": "FEISHU_TABLE_SCHEMA_VERSION",
         "finnhub_api_key": "FINNHUB_API_KEY",
     }
 
