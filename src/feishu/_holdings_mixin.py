@@ -303,7 +303,7 @@ class HoldingsMixin:
             }
 
             new_name = holding.asset_name or existing.asset_name
-            if new_name and len(new_name) > len(existing.asset_name or ''):
+            if new_name and new_name != (existing.asset_name or ''):
                 update_fields['asset_name'] = new_name
                 print(f"[持仓名称更新] {existing.asset_name} -> {new_name}")
 
@@ -388,7 +388,7 @@ class HoldingsMixin:
                     'updated_at': now_str,
                 }
                 new_name = incoming.asset_name or existing.asset_name
-                if new_name and len(new_name) > len(existing.asset_name or ''):
+                if new_name and new_name != (existing.asset_name or ''):
                     update_fields['asset_name'] = new_name
 
                 update_payloads.append({'record_id': existing.record_id, 'fields': update_fields})

@@ -36,7 +36,7 @@ class ETFProvider:
             prefix = get_exchange_prefix(code)
             query_code = f"{prefix}{code}"
 
-            url = f"http://qt.gtimg.cn/q={query_code}"
+            url = f"https://qt.gtimg.cn/q={query_code}"
             response = self.fetcher.session.get(url, timeout=10)
             response.encoding = "gb2312"
             text = response.text

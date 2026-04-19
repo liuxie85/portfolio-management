@@ -67,13 +67,15 @@ class ValuationService:
             t.start()
             t.join(timeout=price_timeout_seconds)
 
+            if t.is_alive():
+                # Thread timed out — daemon will be cleaned up on process exit
+                price_errors.append(f"价格获取超时（{price_timeout_seconds}秒），回退到缓存")
+            elif fetch_result["error"]:
+                price_errors.append(f"价格获取异常，回退到缓存: {fetch_result['error']}")
+
             if fetch_result["prices"] is not None:
                 prices = fetch_result["prices"]
             else:
-                if t.is_alive():
-                    price_errors.append(f"价格获取超时（{price_timeout_seconds}秒），回退到缓存")
-                elif fetch_result["error"]:
-                    price_errors.append(f"价格获取异常，回退到缓存: {fetch_result['error']}")
 
                 if allow_stale_price_fallback:
                     prices = self.price_fetcher.fetch_batch(

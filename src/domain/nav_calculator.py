@@ -114,6 +114,12 @@ class NavCalculator:
             shares_dec = total_value_dec
 
         nav_dec = (total_value_dec / shares_dec) if shares_dec > 0 else Decimal("1.0")
+        if shares_dec <= 0 and total_value_dec > 0:
+            import logging
+            logging.getLogger(__name__).warning(
+                "NAV defaulted to 1.0: shares=%.2f but total_value=%.2f — possible data corruption",
+                float(shares_dec), float(total_value_dec),
+            )
         nav_dec = cls.quantize_nav(nav_dec)
 
         shares_change = float(shares_change_dec)

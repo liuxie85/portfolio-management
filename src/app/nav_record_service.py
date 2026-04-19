@@ -93,17 +93,6 @@ class NavRecordService:
             all_navs=all_navs,
         )
 
-        if persist:
-            try:
-                self.manager.snapshot_service.persist_holdings_snapshot(
-                    account=account,
-                    today=today,
-                    valuation=valuation,
-                    dry_run=dry_run,
-                )
-            except Exception as exc:
-                raise RuntimeError(f"Failed to write holdings_snapshot for {today} ({account}): {exc}") from exc
-
         nav_record = self.manager._build_nav_record(
             today=today,
             account=account,
@@ -141,6 +130,22 @@ class NavRecordService:
                 self.storage.upsert_nav_bulk([nav_record], mode="replace", allow_partial=False)
             else:
                 self.storage.save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
+
+        # Snapshot after NAV record to avoid orphaned snapshots on NAV write failure
+        if persist:
+            try:
+                self.manager.snapshot_service.persist_holdings_snapshot(
+                    account=account,
+                    today=today,
+                    valuation=valuation,
+                    dry_run=dry_run,
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "holdings_snapshot write failed for %s (%s): %s — NAV record was saved successfully",
+                    today, account, exc,
+                )
 
         if persist and not dry_run:
             self.manager._print_nav_summary(

@@ -106,7 +106,10 @@ class LocalPriceCache:
 
     def __del__(self):
         """析构时确保数据写入"""
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def get(self, asset_id: str, *, allow_expired: bool = False, max_stale_after_expiry_sec: int = 0) -> Optional[PriceCache]:
         """获取价格缓存 - 线程安全
@@ -376,7 +379,10 @@ class LocalHoldingsIndexCache:
         self.flush()
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def load_all(self) -> Dict[str, Dict[str, Any]]:
         with self._lock:
@@ -495,7 +501,10 @@ class LocalNavIndexCache:
         self.flush()
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
     @staticmethod
     def _parse_date(s: Any) -> Optional[date]:
@@ -710,7 +719,10 @@ class LocalCashFlowAggCache:
         self.flush()
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def get_account(self, account: str) -> Dict[str, Any]:
         with self._lock:

@@ -38,12 +38,25 @@ class ReportingService:
         price_fetcher = getattr(self.manager, "price_fetcher", None)
         if price_fetcher and holdings:
             name_map = {holding.asset_id: holding.asset_name for holding in holdings}
-            prices = price_fetcher.fetch_batch(
-                [holding.asset_id for holding in holdings],
-                name_map=name_map,
-                use_concurrent=True,
-                skip_us=False,
-            )
+            import threading
+            fetch_result = {"prices": None}
+
+            def _fetch():
+                try:
+                    fetch_result["prices"] = price_fetcher.fetch_batch(
+                        [holding.asset_id for holding in holdings],
+                        name_map=name_map,
+                        use_concurrent=True,
+                        skip_us=False,
+                    )
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_fetch, daemon=True)
+            t.start()
+            t.join(timeout=30)
+            if fetch_result["prices"] is not None:
+                prices = fetch_result["prices"]
 
         industry_values = {}
         total_value = 0.0

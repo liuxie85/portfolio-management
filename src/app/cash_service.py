@@ -138,6 +138,16 @@ class CashService:
         remaining = self.to_decimal(amount)
         cash_holding, mmf_holding = self.get_cash_like_holdings(account)
 
+        # Pre-validate: check total available before any writes
+        total_available = Decimal("0")
+        if cash_holding and cash_holding.quantity > 0:
+            total_available += self.to_decimal(cash_holding.quantity)
+        if mmf_holding and mmf_holding.quantity > 0:
+            total_available += self.to_decimal(mmf_holding.quantity)
+        if total_available < remaining:
+            print(f"  ✗ 现金不足，需要: ¥{float(self.quantize_money(remaining)):,.2f}，可用: ¥{float(self.quantize_money(total_available)):,.2f}")
+            return False
+
         if cash_holding and cash_holding.quantity > 0:
             cash_qty = self.to_decimal(cash_holding.quantity)
             deduct_from_cash = min(cash_qty, remaining)
@@ -151,10 +161,6 @@ class CashService:
             self.storage.update_holding_quantity(MMF_ASSET_ID, account, float(-self.quantize_money(deduct_from_mmf)))
             remaining -= deduct_from_mmf
             print(f"  从 {MMF_ASSET_ID} 扣除: ¥{float(self.quantize_money(deduct_from_mmf)):,.2f}")
-
-        if remaining > 0:
-            print(f"  ✗ 现金不足，还需: ¥{float(self.quantize_money(remaining)):,.2f}")
-            return False
 
         return True
 

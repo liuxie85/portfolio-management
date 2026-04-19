@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -65,6 +66,20 @@ class CompensationService:
                 pass
 
         self.queue_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.queue_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(task), ensure_ascii=False, sort_keys=True) + "\n")
+        import tempfile
+        line = json.dumps(asdict(task), ensure_ascii=False, sort_keys=True) + "\n"
+        fd, tmp_path = tempfile.mkstemp(dir=str(self.queue_file.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                # Copy existing content then append
+                if self.queue_file.exists():
+                    f.write(self.queue_file.read_text(encoding="utf-8"))
+                f.write(line)
+            os.replace(tmp_path, str(self.queue_file))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         return task

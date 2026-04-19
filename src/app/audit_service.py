@@ -55,9 +55,10 @@ class AuditService:
             target_navs = list(all_navs)
 
         rows: List[Dict[str, Any]] = []
+        nav_index = self.portfolio._build_nav_lookup(all_navs)
         for n in target_navs:
-            pm = self.portfolio._find_prev_month_end_nav(all_navs, n.date.year, n.date.month)
-            py = self.portfolio._find_year_end_nav(all_navs, str(n.date.year - 1))
+            pm = self.portfolio._find_prev_month_end_nav(all_navs, n.date.year, n.date.month, nav_index=nav_index)
+            py = self.portfolio._find_year_end_nav(all_navs, str(n.date.year - 1), nav_index=nav_index)
             monthly_cf = self.portfolio._get_monthly_cash_flow(audit_account, n.date.year, n.date.month) if pm else None
             yearly_cf = self.portfolio._get_yearly_cash_flow(audit_account, str(n.date.year)) if py else None
             raw_mtd_nav_change = self.portfolio._calc_mtd_nav_change(n.nav, pm) if (n.nav is not None and pm) else None

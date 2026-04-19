@@ -97,9 +97,12 @@ class CNStockProvider:
         return None
 
     def fetch_from_akshare(self, code: str) -> Optional[dict]:
+        """Fallback: downloads full A-share market data (~5000 rows) for a single stock."""
         try:
             import akshare as ak
             import pandas as pd
+            import logging
+            logging.getLogger(__name__).debug("akshare fallback: downloading full A-share market for %s", code)
 
             pure_code = code[2:] if code.startswith(("SH", "SZ")) else code
             df = ak.stock_zh_a_spot_em()

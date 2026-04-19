@@ -1372,12 +1372,15 @@ def init_db(account: str = DEFAULT_ACCOUNT, initial_cash: float = 0) -> Dict[str
 # ========== 便捷函数（供 Skill 直接调用） ==========
 
 _default_skill = None
+_default_skill_lock = __import__('threading').Lock()
 
 def _get_default_skill() -> PortfolioSkill:
-    """获取默认 Skill 实例（单例模式）"""
+    """获取默认 Skill 实例（线程安全单例）"""
     global _default_skill
     if _default_skill is None:
-        _default_skill = PortfolioSkill()
+        with _default_skill_lock:
+            if _default_skill is None:
+                _default_skill = PortfolioSkill()
     return _default_skill
 
 

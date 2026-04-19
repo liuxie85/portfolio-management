@@ -129,7 +129,7 @@ class FundProvider:
             return None
 
         query_code = f"jj{code}"
-        url = f"http://qt.gtimg.cn/q={query_code}"
+        url = f"https://qt.gtimg.cn/q={query_code}"
         response = self.fetcher.session.get(url, timeout=5)
         response.encoding = "gb2312"
         text = response.text
@@ -163,7 +163,7 @@ class FundProvider:
 
     def fetch_from_eastmoney(self, code: str) -> Optional[dict]:
         try:
-            url = f"http://fund.eastmoney.com/{code}.html"
+            url = f"https://fund.eastmoney.com/{code}.html"
             response = self.fetcher.session.get(url, timeout=10)
             response.encoding = "utf-8"
             text = response.text
