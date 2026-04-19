@@ -1015,11 +1015,11 @@ class PortfolioSkill:
                         cash_weight=round(live_cash / live_total, 6) if live_total > 0 else 0,
                         cash_flow=round(daily_cash_flow, 2),
                         share_change=round(synthetic_share_change, 2),
-                        mtd_nav_change=round(synthetic_mtd_nav_change, 6),
-                        ytd_nav_change=round(synthetic_ytd_nav_change, 6),
+                        mtd_nav_change=round(synthetic_mtd_nav_change, 6) if synthetic_mtd_nav_change is not None else None,
+                        ytd_nav_change=round(synthetic_ytd_nav_change, 6) if synthetic_ytd_nav_change is not None else None,
                         pnl=round(synthetic_daily_pnl, 2) if synthetic_daily_pnl is not None else None,
-                        mtd_pnl=round(synthetic_mtd_pnl, 2),
-                        ytd_pnl=round(synthetic_ytd_pnl, 2),
+                        mtd_pnl=round(synthetic_mtd_pnl, 2) if synthetic_mtd_pnl is not None else None,
+                        ytd_pnl=round(synthetic_ytd_pnl, 2) if synthetic_ytd_pnl is not None else None,
                         details={"is_synthetic": True},
                     )
                     working_navs.append(synthetic_nav)

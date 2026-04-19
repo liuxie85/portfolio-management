@@ -20,6 +20,12 @@ class TradeService:
     ``manager`` is intentionally used as a compatibility facade so existing
     PortfolioManager helper patch points keep working while the orchestration
     code moves out of ``portfolio.py``.
+
+    NOTE: buy/sell/deposit/withdraw perform multi-table writes (transaction →
+    holding → cash) without database-level transactions.  If a secondary write
+    fails, a compensation task is logged and the method continues.  The
+    transaction record is the source of truth; periodic reconciliation should
+    detect and repair any drift.
     """
 
     def __init__(self, manager: Any, storage: Any):

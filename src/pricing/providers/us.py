@@ -167,7 +167,7 @@ class USStockProvider:
             prev_close = valid_closes[-2]
         elif prev_close is None and opens:
             prev_close = opens[0]
-        else:
+        elif prev_close is None:
             prev_close = current
 
         change = current - prev_close

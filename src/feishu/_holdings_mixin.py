@@ -255,9 +255,9 @@ class HoldingsMixin:
 
         conditions = []
         if account:
-            conditions.append(f'CurrentValue.[account] = "{account}"')
+            conditions.append(f'CurrentValue.[account] = "{self._escape_filter_value(account)}"')
         if asset_type:
-            conditions.append(f'CurrentValue.[asset_type] = "{asset_type}"')
+            conditions.append(f'CurrentValue.[asset_type] = "{self._escape_filter_value(asset_type)}"')
         filter_str = ' AND '.join(conditions) if conditions else None
         records = self.client.list_records(
             'holdings',

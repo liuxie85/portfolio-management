@@ -153,9 +153,9 @@ class TransactionsMixin:
         conditions = []
 
         if account:
-            conditions.append(f'CurrentValue.[account] = "{account}"')
+            conditions.append(f'CurrentValue.[account] = "{self._escape_filter_value(account)}"')
         if tx_type:
-            conditions.append(f'CurrentValue.[tx_type] = "{tx_type}"')
+            conditions.append(f'CurrentValue.[tx_type] = "{self._escape_filter_value(tx_type)}"')
         if start_date:
             conditions.append(f'CurrentValue.[tx_date] >= "{start_date.strftime("%Y-%m-%d")}"')
         if end_date:
@@ -171,7 +171,7 @@ class TransactionsMixin:
             tx = self._dict_to_transaction(fields)
             transactions.append(tx)
 
-        transactions.sort(key=lambda t: t.tx_date, reverse=True)
+        transactions.sort(key=lambda t: t.tx_date or date.min, reverse=True)
         return transactions
 
     def _transaction_to_dict(self, tx: Transaction) -> Dict:

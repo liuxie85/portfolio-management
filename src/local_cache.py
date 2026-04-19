@@ -149,10 +149,10 @@ class LocalPriceCache:
                 asset_type=AssetType(data.get('asset_type')) if data.get('asset_type') else AssetType.OTHER,
                 price=float(data.get('price', 0)),
                 currency=data.get('currency', 'CNY'),
-                cny_price=float(data.get('cny_price')) if data.get('cny_price') else None,
-                change=float(data.get('change')) if data.get('change') else None,
-                change_pct=float(data.get('change_pct')) if data.get('change_pct') else None,
-                exchange_rate=float(data.get('exchange_rate')) if data.get('exchange_rate') else None,
+                cny_price=float(data['cny_price']) if data.get('cny_price') is not None else None,
+                change=float(data['change']) if data.get('change') is not None else None,
+                change_pct=float(data['change_pct']) if data.get('change_pct') is not None else None,
+                exchange_rate=float(data['exchange_rate']) if data.get('exchange_rate') is not None else None,
                 data_source=data.get('data_source'),
                 expires_at=expires_at if expires_at else None
             )
@@ -240,10 +240,10 @@ class LocalPriceCache:
                         asset_type=AssetType(data.get('asset_type')) if data.get('asset_type') else AssetType.OTHER,
                         price=float(data.get('price', 0)),
                         currency=data.get('currency', 'CNY'),
-                        cny_price=float(data.get('cny_price')) if data.get('cny_price') else None,
-                        change=float(data.get('change')) if data.get('change') else None,
-                        change_pct=float(data.get('change_pct')) if data.get('change_pct') else None,
-                        exchange_rate=float(data.get('exchange_rate')) if data.get('exchange_rate') else None,
+                        cny_price=float(data['cny_price']) if data.get('cny_price') is not None else None,
+                        change=float(data['change']) if data.get('change') is not None else None,
+                        change_pct=float(data['change_pct']) if data.get('change_pct') is not None else None,
+                        exchange_rate=float(data['exchange_rate']) if data.get('exchange_rate') is not None else None,
                         data_source=data.get('data_source'),
                         expires_at=expires_at if expires_at else None
                     ))

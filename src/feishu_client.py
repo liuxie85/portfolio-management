@@ -39,6 +39,7 @@ class FeishuClient:
         # 限流保护：飞书 API 限制 20 QPS
         self._last_request_time = 0
         self._min_interval = 0.06  # 60ms = 约 16 QPS，留有余量
+        self._rate_lock = threading.Lock()
 
         # 表配置映射（支持两种配置方式）
         # 方式1（统一base）：FEISHU_APP_TOKEN=bascnxxx + FEISHU_TABLE_HOLDINGS=tblxxx
@@ -123,12 +124,13 @@ class FeishuClient:
             return self._tenant_token
 
     def _rate_limit(self):
-        """限流控制"""
-        now = time.time()
-        elapsed = now - self._last_request_time
-        if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
-        self._last_request_time = time.time()
+        """限流控制（线程安全）"""
+        with self._rate_lock:
+            now = time.time()
+            elapsed = now - self._last_request_time
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_request_time = time.time()
 
     def _request(self, method: str, endpoint: str, _retry_count: int = 0, **kwargs) -> Dict:
         """发送请求（带限流和错误处理）"""

@@ -201,7 +201,7 @@ class CashFlowMixin:
                 continue
             cash_flows.append(cf)
 
-        cash_flows.sort(key=lambda c: c.flow_date, reverse=True)
+        cash_flows.sort(key=lambda c: c.flow_date or date.min, reverse=True)
         return cash_flows
 
     def get_total_cash_flow_cny(self, account: str) -> float:
