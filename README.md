@@ -7,6 +7,7 @@
 - 人类使用：`README.md`、`docs/INDEX.md`
 - Agent 使用：`SKILL.md`
 - Python API：`skill_api.py`
+- MCP Server：`mcp_server.py`（供 OpenClaw、Claude Desktop 等 MCP 客户端调用）
 - 架构说明：`docs/architecture.md`
 - Schema 与迁移：`docs/schema.md`、`docs/migrations.md`
 
@@ -64,6 +65,34 @@ withdraw(10000, remark="出金")
 ```
 
 日报数据与 HTML 统一从 `scripts/publish_daily_report.py` 生成；`scripts/generate_daily_report_html.py` 仅负责渲染已准备好的 bundle。
+
+## MCP Server
+
+将全部 Skill API 暴露为 MCP tools，供 OpenClaw、Claude Desktop、Cursor 等 MCP 兼容客户端使用。
+
+```bash
+# stdio 模式（默认，适合本地 MCP 客户端）
+python mcp_server.py
+
+# SSE 模式（HTTP，适合远程调用）
+python mcp_server.py --sse
+```
+
+MCP 客户端配置示例：
+
+```json
+{
+  "mcpServers": {
+    "portfolio-management": {
+      "command": "python",
+      "args": ["mcp_server.py"],
+      "cwd": "/path/to/portfolio-management"
+    }
+  }
+}
+```
+
+共注册 17 个 tools，覆盖交易、持仓、净值、现金、报告、同步等全部功能。写入类操作默认带 `dry_run=True` 安全保护。
 
 ## 当前结构
 

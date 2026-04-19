@@ -10,3 +10,6 @@ yfinance>=0.2.18
 
 # 场外基金价格（price_fetcher.py 中使用）
 akshare>=1.10.0
+
+# MCP Server（mcp_server.py 中使用）
+mcp>=1.0.0
