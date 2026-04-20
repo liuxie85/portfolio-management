@@ -19,6 +19,11 @@ class FundProvider:
     def supports(self, request: PriceRequest) -> bool:
         code = request.normalized_code or request.code
         hints = request.hints or {}
+        asset_type = request.asset_type.value if hasattr(request.asset_type, "value") else request.asset_type
+        if asset_type in ("otc_fund", "fund"):
+            return True
+        if asset_type == "exchange_fund":
+            return False
         return bool(hints.get("is_fund", False) or is_otc_fund(code))
 
     def fetch_one(self, request: PriceRequest) -> ProviderResult:

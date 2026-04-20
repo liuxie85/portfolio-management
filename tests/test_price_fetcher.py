@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, MagicMock
 import pytz
 
-from src.price_fetcher import MarketTimeUtil, PriceFetcher
+from src.price_fetcher import MarketTimeUtil, PriceFetcher, _market_type_from_asset_type
 from src.asset_utils import detect_market_type
 from src.models import AssetType, PriceCache
 from src.pricing.providers.cn import CNStockProvider
@@ -246,6 +246,8 @@ class TestPriceFetcher:
         assert detect_market_type("AAPL") == "us"
         assert detect_market_type("TSLA") == "us"
         assert detect_market_type("110022") == "fund"
+        assert detect_market_type("510300") == "cn"
+        assert detect_market_type("159915") == "cn"
 
     def test_is_etf(self):
         """测试ETF识别"""
@@ -255,6 +257,12 @@ class TestPriceFetcher:
         assert fetcher._is_etf("159915") == True  # 创业板ETF
         # 非ETF
         assert fetcher._is_etf("000001") == False
+
+    def test_asset_type_market_routing_for_split_funds(self):
+        assert _market_type_from_asset_type("510300", AssetType.EXCHANGE_FUND, "cn") == "cn"
+        assert _market_type_from_asset_type("110022", AssetType.OTC_FUND, "fund") == "fund"
+        assert _market_type_from_asset_type("510300", AssetType.FUND, "fund") == "cn"
+        assert _market_type_from_asset_type("SPY", AssetType.EXCHANGE_FUND, "us") == "us"
 
     def test_is_otc_fund(self):
         """测试场外基金识别"""

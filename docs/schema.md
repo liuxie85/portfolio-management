@@ -25,6 +25,11 @@ Optional fields:
 - `industry` (text)
 - `asset_class` (text)
 
+`asset_type` fund values:
+- `exchange_fund`: exchange-traded mainland fund/ETF/LOF, priced through CN exchange quotes
+- `otc_fund`: over-the-counter/open-end fund, priced through fund NAV providers
+- `fund`: legacy/unknown fund value; kept for backward compatibility
+
 ### transactions
 
 Required fields:

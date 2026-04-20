@@ -55,16 +55,29 @@ ln -s /var/lib/portfolio-management/reports ./reports
 from skill_api import buy, sell, deposit, withdraw, get_holdings, full_report, record_nav, sync_futu_cash_mmf
 
 get_holdings(include_price=True, group_by_market=True)
+get_holdings(include_price=True, account="alice")
 sync_futu_cash_mmf(dry_run=True)
+sync_futu_cash_mmf(dry_run=True, account="alice")
 record_nav()
+record_nav(account="alice")
 full_report()
+full_report(account="alice")
 buy("600519", "贵州茅台", 100, 1800, broker="平安证券")
+buy("600519", "贵州茅台", 100, 1800, broker="平安证券", account="alice")
 sell("600519", 50, 1900, broker="平安证券")
 deposit(50000, remark="入金")
 withdraw(10000, remark="出金")
 ```
 
 日报数据与 HTML 统一从 `scripts/publish_daily_report.py` 生成；`scripts/generate_daily_report_html.py` 仅负责渲染已准备好的 bundle。
+
+常用 CLI 也支持显式指定账户：
+
+```bash
+python scripts/pm.py cash --account alice
+python scripts/pm.py holdings --account alice --json
+python scripts/publish_daily_report.py --account alice
+```
 
 ## MCP Server
 

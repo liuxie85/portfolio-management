@@ -54,6 +54,8 @@ class AssetType(str, Enum):
 
     # fund
     FUND = "fund"
+    EXCHANGE_FUND = "exchange_fund"
+    OTC_FUND = "otc_fund"
     CN_FUND = "cn_fund"
     US_FUND = "us_fund"
     HK_FUND = "hk_fund"

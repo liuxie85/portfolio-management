@@ -10,10 +10,12 @@ Within tolerance:
 
 ## Classification
 - cash-like: `*-CASH`, `*-MMF` or `asset_type=cash`
-- CN stocks/ETFs: detected as `cn`
+- CN stocks: detected as `cn`
 - HK stocks: detected as `hk`
 - US stocks: detected as `us`
-- open-end funds / fund NAV: detected as `fund`
+- exchange-traded funds / ETFs: persisted as `exchange_fund`, normalized as `fund`, priced through CN exchange quotes
+- open-end funds / fund NAV: persisted as `otc_fund`, normalized as `fund`, priced through fund NAV providers
+- legacy/unknown fund rows may still use `fund`; pricing falls back to code-based routing
 
 ## FX
 - Convert non-CNY assets with current FX rate (USDCNY / HKDCNY).

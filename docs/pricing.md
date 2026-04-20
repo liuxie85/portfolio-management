@@ -2,8 +2,8 @@
 
 ## Sources (priority)
 
-1) **Tencent batch** for CN/HK/ETF: `qt.gtimg.cn` (fast, low dependency)
-2) **Tencent jj** for open-end fund NAV (fast, low dependency)
+1) **Tencent batch** for CN/HK/exchange-traded funds (`asset_type=exchange_fund`): `qt.gtimg.cn` (fast, low dependency)
+2) **Tencent jj** for open-end fund NAV (`asset_type=otc_fund`) (fast, low dependency)
 3) US: Finnhub (if API key) → Yahoo chart API fallback
 4) akshare / eastmoney as slow fallbacks for specific assets
 

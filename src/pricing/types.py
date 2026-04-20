@@ -11,6 +11,7 @@ class PriceRequest:
 
     code: str
     asset_name: str = ""
+    asset_type: Optional[Any] = None
     normalized_code: Optional[str] = None
     hints: Dict[str, Any] = field(default_factory=dict)
 

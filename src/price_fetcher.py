@@ -48,6 +48,31 @@ from .pricing.payload import (
 # 汇率缓存文件路径（使用项目相对路径）
 RATE_CACHE_FILE = Path(__file__).parent.parent / '.data' / 'rate_cache.json'
 
+
+def _market_type_from_asset_type(code: str, asset_type: Any, default_market_type: Optional[str]) -> Optional[str]:
+    """Map persisted asset_type to pricing market_type, keeping legacy fund compatible."""
+    from .models import AssetType
+
+    if asset_type is None:
+        return default_market_type
+
+    atv = asset_type.value if hasattr(asset_type, 'value') else str(asset_type)
+    if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
+        return 'cn'
+    if atv == AssetType.EXCHANGE_FUND.value:
+        return default_market_type if default_market_type in ('hk', 'us') else 'cn'
+    if atv in (AssetType.HK_STOCK.value, AssetType.HK_FUND.value):
+        return 'hk'
+    if atv in (AssetType.US_STOCK.value, AssetType.US_FUND.value):
+        return 'us'
+    if atv in (AssetType.OTC_FUND.value,):
+        return 'fund'
+    if atv in (AssetType.FUND.value,):
+        # Legacy/unknown fund rows: route exchange-traded fund codes as CN quotes.
+        return 'cn' if is_etf(code) else 'fund'
+    return default_market_type
+
+
 class PriceFetcher:
     """统一价格获取器 (带缓存优化，支持飞书多维表)
 
@@ -214,7 +239,11 @@ class PriceFetcher:
             return expired_cache_payload
 
         # 2) realtime 获取
-        result = self._fetch_realtime(code, asset_name)
+        request_asset_type = asset_type_map.get(code) if asset_type_map is not None and code in asset_type_map else None
+        if request_asset_type is not None:
+            result = self._fetch_realtime(code, asset_name, request_asset_type)
+        else:
+            result = self._fetch_realtime(code, asset_name)
         if result:
             result = self._normalize_price_payload(result)
 
@@ -229,30 +258,30 @@ class PriceFetcher:
             market_type = _detect_market_type_func(code)
             # Prefer holdings-provided asset_type when available to avoid market mis-detection.
             if asset_type_map is not None and code in asset_type_map:
-                at = asset_type_map.get(code)
-                atv = at.value if hasattr(at, 'value') else str(at)
-                if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
-                    market_type = 'cn'
-                elif atv in (AssetType.HK_STOCK.value, AssetType.HK_FUND.value):
-                    market_type = 'hk'
-                elif atv in (AssetType.US_STOCK.value, AssetType.US_FUND.value):
-                    market_type = 'us'
-                elif atv in (AssetType.FUND.value,):
-                    market_type = 'fund'
+                market_type = _market_type_from_asset_type(code, asset_type_map.get(code), market_type)
 
             ttl = int(MarketTimeUtil.get_cache_ttl(market_type) * market_closed_ttl_multiplier)
             expires_at = bj_now_naive() + timedelta(seconds=ttl)
 
             # 检测资产类型（用于 price_cache 记录；不影响 holdings 的 asset_type）
             asset_type = AssetType.OTHER
-            if market_type == 'cn':
+            detected_asset_type = None
+            try:
+                from .asset_utils import detect_asset_type
+                detected_asset_type = detect_asset_type(code)[0]
+            except Exception:
+                detected_asset_type = None
+
+            if detected_asset_type in (AssetType.EXCHANGE_FUND, AssetType.OTC_FUND):
+                asset_type = detected_asset_type
+            elif market_type == 'cn':
                 asset_type = AssetType.A_STOCK
             elif market_type == 'hk':
                 asset_type = AssetType.HK_STOCK
             elif market_type == 'us':
                 asset_type = AssetType.US_STOCK
             elif market_type == 'fund':
-                asset_type = AssetType.FUND
+                asset_type = AssetType.OTC_FUND
 
             price_cache = PriceCache(
                 asset_id=code,
@@ -393,17 +422,7 @@ class PriceFetcher:
             market_type = _detect_market_type_func(code)
             # Prefer holdings-provided asset_type when available to avoid market mis-detection.
             if asset_type_map is not None and code in asset_type_map:
-                from .models import AssetType
-                at = asset_type_map.get(code)
-                atv = at.value if hasattr(at, 'value') else str(at)
-                if atv in (AssetType.A_STOCK.value, AssetType.CN_FUND.value):
-                    market_type = 'cn'
-                elif atv in (AssetType.HK_STOCK.value, AssetType.HK_FUND.value):
-                    market_type = 'hk'
-                elif atv in (AssetType.US_STOCK.value, AssetType.US_FUND.value):
-                    market_type = 'us'
-                elif atv in (AssetType.FUND.value,):
-                    market_type = 'fund'
+                market_type = _market_type_from_asset_type(code, asset_type_map.get(code), market_type)
             if market_type == 'us' and not skip_us:
                 us_codes.append(code)
             elif market_type != 'us':
@@ -421,7 +440,7 @@ class PriceFetcher:
                 # 提交非美股查询（_nested=True 避免嵌套线程池）
                 if other_codes:
                     futures.append(
-                        executor.submit(self._fetch_concurrent, other_codes, name_map, 5, True)
+                        executor.submit(self._fetch_concurrent, other_codes, name_map, 5, True, asset_type_map)
                     )
 
                 # 提交美股查询（并行执行，_nested=True 避免嵌套线程池）
@@ -451,7 +470,7 @@ class PriceFetcher:
             # 非并发模式：串行处理
             for code in other_codes:
                 asset_name = name_map.get(code)
-                result = self.fetch(code, asset_name, force_refresh)
+                result = self.fetch(code, asset_name, force_refresh, asset_type_map=asset_type_map)
                 if result and 'error' not in result:
                     results[code] = result
                 elif code in expired_cache:
@@ -476,7 +495,8 @@ class PriceFetcher:
         return results
 
     def _fetch_concurrent(self, codes: List[str], name_map: Dict[str, str],
-                          max_workers: int = 5, _nested: bool = False) -> Dict[str, Dict]:
+                          max_workers: int = 5, _nested: bool = False,
+                          asset_type_map: Dict[str, Any] = None) -> Dict[str, Dict]:
         """并发批量查询（用于非美股资产）
 
         优化：腾讯行情支持 batch 接口，本函数优先将 cn/hk/fund(jj) 走批量，
@@ -496,7 +516,7 @@ class PriceFetcher:
 
         # 1) Tencent batch for cn/hk/fund
         try:
-            batch_results, leftover = self._fetch_tencent_quotes_batch(codes, name_map=name_map)
+            batch_results, leftover = self._fetch_tencent_quotes_batch(codes, name_map=name_map, asset_type_map=asset_type_map)
             results.update(batch_results)
             codes = leftover
         except Exception as e:
@@ -506,7 +526,7 @@ class PriceFetcher:
         def fetch_single(code: str):
             try:
                 asset_name = name_map.get(code)
-                return code, self.fetch(code, asset_name, force_refresh=False)
+                return code, self.fetch(code, asset_name, force_refresh=False, asset_type_map=asset_type_map)
             except Exception as e:
                 return code, {'error': str(e)}
 
@@ -540,7 +560,12 @@ class PriceFetcher:
 
         return results
 
-    def _fetch_tencent_quotes_batch(self, codes: List[str], name_map: Dict[str, str] = None) -> Tuple[Dict[str, Dict], List[str]]:
+    def _fetch_tencent_quotes_batch(
+        self,
+        codes: List[str],
+        name_map: Dict[str, str] = None,
+        asset_type_map: Dict[str, Any] = None,
+    ) -> Tuple[Dict[str, Dict], List[str]]:
         """Fetch Tencent quotes in batch for cn/hk/fund(jj).
 
         Returns:
@@ -557,6 +582,8 @@ class PriceFetcher:
 
         for code in codes:
             mkt = _detect_market_type_func(code)
+            if asset_type_map is not None and code in asset_type_map:
+                mkt = _market_type_from_asset_type(code, asset_type_map.get(code), mkt)
             c = (code or '').upper().strip()
             if mkt == 'cn':
                 if c.startswith(('SH', 'SZ')):
@@ -1011,7 +1038,7 @@ class PriceFetcher:
             'source': 'fixed'
         })
 
-    def _fetch_realtime(self, code: str, asset_name: str) -> Optional[Dict]:
+    def _fetch_realtime(self, code: str, asset_name: str, asset_type: Any = None) -> Optional[Dict]:
         """获取实时价格 (内部方法)"""
         # 根据名称辅助判断类型
         name_hints = self._get_type_hints_from_name(asset_name)
@@ -1021,6 +1048,7 @@ class PriceFetcher:
         request = PriceRequest(
             code=code,
             asset_name=asset_name or "",
+            asset_type=asset_type,
             normalized_code=normalized_code,
             hints=name_hints,
         )

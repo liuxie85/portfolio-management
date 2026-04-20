@@ -31,6 +31,7 @@ class PublishConfig:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Record NAV, render daily report HTML, and publish it to a static directory.")
+    parser.add_argument("--account", default=None, help="Account to operate on. Defaults to config/PORTFOLIO_ACCOUNT.")
     parser.add_argument("--account-label", default=os.environ.get("PM_REPORT_ACCOUNT_LABEL", "lx"), help="Display-only account label shown in the HTML report.")
     parser.add_argument("--reports-dir", default=str(REPO_ROOT / "reports"), help="Directory for generated HTML report files.")
     parser.add_argument("--publish-root", default=str(WORKSPACE / "prototypes"), help="Root directory for published static pages.")
@@ -131,6 +132,7 @@ def build_report_data(
     use_bulk_nav_upsert: bool = False,
     sync_futu_cash_mmf: bool = False,
     sync_futu_dry_run: bool = False,
+    account: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build a consistent bundle for publishing.
 
@@ -140,13 +142,13 @@ def build_report_data(
     """
     # Build a single snapshot first (heavy operation: holdings + price fetch).
     # Import lazily to keep script startup fast.
-    from skill_api import _get_default_skill
+    from skill_api import get_skill
 
     import time
     def _ms():
         return int(time.time()*1000)
 
-    skill = _get_default_skill()
+    skill = get_skill(account)
 
     futu_sync_result = None
     if sync_futu_cash_mmf:
@@ -217,6 +219,7 @@ def build_report_data(
         raise RuntimeError(json.dumps(nav_snapshot, ensure_ascii=False))
 
     return {
+        "account": skill.account,
         "snapshot": snapshot,
         "nav_result": nav_result,
         "report": report,
@@ -317,6 +320,7 @@ def main() -> None:
             use_bulk_nav_upsert=bool(args.use_bulk_nav_upsert),
             sync_futu_cash_mmf=bool(args.sync_futu_cash_mmf),
             sync_futu_dry_run=bool(args.sync_futu_dry_run),
+            account=args.account,
         )
         timings['build_report_data_ms'] = _now_ms() - t1
 
@@ -325,6 +329,7 @@ def main() -> None:
             timings['total_ms'] = _now_ms() - t0
             out = {
                 "success": True,
+                "account": report_bundle.get("account"),
                 "nav_result": report_bundle.get("nav_result"),
                 "report": report_bundle.get("report"),
                 "nav_snapshot": report_bundle.get("nav_snapshot"),
@@ -350,6 +355,7 @@ def main() -> None:
 
         result = {
             "success": True,
+            "account": report_bundle.get("account"),
             "date": report_date,
             "nav_result": report_bundle["nav_result"],
             "futu_sync_result": report_bundle.get("futu_sync_result"),

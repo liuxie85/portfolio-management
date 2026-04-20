@@ -1056,7 +1056,12 @@ class TestPortfolioManagerAssetTypeDetection:
 
     def test_detect_asset_type_fund(self):
         """测试基金类型检测"""
-        assert detect_asset_type('110022')[0] == AssetType.FUND
+        assert detect_asset_type('110022')[0] == AssetType.OTC_FUND
+        assert detect_asset_type('004001')[0] == AssetType.OTC_FUND
+        assert detect_asset_type('510300')[0] == AssetType.EXCHANGE_FUND
+        assert detect_asset_type('159915')[0] == AssetType.EXCHANGE_FUND
+        assert detect_asset_type('510300.SH')[0] == AssetType.EXCHANGE_FUND
+        assert detect_asset_type('159915.SZ')[0] == AssetType.EXCHANGE_FUND
 
     def test_detect_asset_type_us_stock(self):
         """测试美股类型检测"""

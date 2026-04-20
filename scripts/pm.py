@@ -9,6 +9,7 @@ Design goals:
 Usage examples:
   . .venv/bin/activate
   python scripts/pm.py cash
+  python scripts/pm.py cash --account alice
   python scripts/pm.py holdings
   python scripts/pm.py holdings --include-price --timeout 25
   python scripts/pm.py nav
@@ -56,21 +57,21 @@ def _dump(obj, as_json: bool):
 def cmd_holdings(args):
     from skill_api import get_holdings
 
-    res = get_holdings(include_price=bool(args.include_price))
+    res = get_holdings(include_price=bool(args.include_price), account=args.account)
     _dump(res, args.json)
 
 
 def cmd_cash(args):
     from skill_api import get_cash
 
-    res = get_cash()
+    res = get_cash(account=args.account)
     _dump(res, args.json)
 
 
 def cmd_nav(args):
     from skill_api import get_nav
 
-    res = get_nav()
+    res = get_nav(account=args.account)
     _dump(res, args.json)
 
 
@@ -83,7 +84,12 @@ def cmd_report(args):
 
     from skill_api import generate_report
 
-    res = generate_report(report_type=args.type, record_nav=False, price_timeout=args.timeout)
+    res = generate_report(
+        report_type=args.type,
+        record_nav=False,
+        price_timeout=args.timeout,
+        account=args.account,
+    )
     if isinstance(res, dict):
         res.setdefault("preview_only", True)
         res.setdefault("canonical_entrypoint", "scripts/publish_daily_report.py")
@@ -93,6 +99,7 @@ def cmd_report(args):
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="pm", description="portfolio-management CLI")
     p.add_argument("--json", action="store_true", help="output JSON")
+    p.add_argument("--account", default=None, help="account to operate on; defaults to config/PORTFOLIO_ACCOUNT")
     p.add_argument("--debug-internal", action="store_true", help="Do not suppress internal stdout prints (debug only).")
 
     sp = p.add_subparsers(dest="cmd", required=True)
@@ -103,14 +110,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hold = sp.add_parser("holdings", help="list holdings")
     p_hold.add_argument("--include-price", action="store_true", help="include price fields (may be slow)")
+    p_hold.add_argument("--account", default=None, help="account to operate on; defaults to config/PORTFOLIO_ACCOUNT")
     p_hold.add_argument("--json", action="store_true", help="output JSON")
     p_hold.set_defaults(func=cmd_holdings)
 
     p_cash = sp.add_parser("cash", help="show cash positions")
+    p_cash.add_argument("--account", default=None, help="account to operate on; defaults to config/PORTFOLIO_ACCOUNT")
     p_cash.add_argument("--json", action="store_true", help="output JSON")
     p_cash.set_defaults(func=cmd_cash)
 
     p_nav = sp.add_parser("nav", help="show latest nav")
+    p_nav.add_argument("--account", default=None, help="account to operate on; defaults to config/PORTFOLIO_ACCOUNT")
     p_nav.add_argument("--json", action="store_true", help="output JSON")
     p_nav.set_defaults(func=cmd_nav)
 
@@ -118,6 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("type", choices=["daily", "monthly", "yearly"], help="report type")
     p_rep.add_argument("--preview", action="store_true", help="acknowledge this command is preview-only")
     p_rep.add_argument("--timeout", type=int, default=30, help="price timeout seconds (default 30)")
+    p_rep.add_argument("--account", default=None, help="account to operate on; defaults to config/PORTFOLIO_ACCOUNT")
     p_rep.add_argument("--json", action="store_true", help="output JSON")
     p_rep.set_defaults(func=cmd_report)
 

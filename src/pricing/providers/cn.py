@@ -21,6 +21,9 @@ class CNStockProvider:
 
     def supports(self, request: PriceRequest) -> bool:
         code = request.normalized_code or request.code
+        asset_type = request.asset_type.value if hasattr(request.asset_type, "value") else request.asset_type
+        if asset_type == "otc_fund":
+            return False
         if not (
             code.startswith(("SH", "SZ"))
             or (

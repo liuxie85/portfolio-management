@@ -97,6 +97,16 @@ def main() -> None:
         test_get_transactions_pushes_date_filter_to_server,
         test_get_total_cash_flow_cny_uses_agg_cache,
     )
+    from tests.test_pm_cli import (
+        test_pm_report_requires_preview_flag,
+        test_pm_report_preview_marks_noncanonical_output,
+        test_pm_cash_passes_account,
+    )
+    from tests.test_daily_report_entrypoints import (
+        test_generate_daily_report_html_is_renderer_only,
+        test_publish_daily_report_returns_renderer_bundle_shape,
+        test_publish_daily_report_build_report_data_passes_account,
+    )
 
     tests = [
         test_currency_from_us_ticker_suffix,
@@ -137,6 +147,13 @@ def main() -> None:
         test_get_holdings_with_asset_type_bypasses_cache,
         test_get_transactions_pushes_date_filter_to_server,
         test_get_total_cash_flow_cny_uses_agg_cache,
+        # CLI / entrypoint account coverage
+        test_pm_report_requires_preview_flag,
+        test_pm_report_preview_marks_noncanonical_output,
+        test_pm_cash_passes_account,
+        test_generate_daily_report_html_is_renderer_only,
+        test_publish_daily_report_returns_renderer_bundle_shape,
+        test_publish_daily_report_build_report_data_passes_account,
     ]
     for t in tests:
         t()

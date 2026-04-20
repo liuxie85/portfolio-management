@@ -22,7 +22,20 @@ def normalize_asset_type(asset_type: Optional[AssetType | str], asset_id: str = 
     t = asset_type.value if hasattr(asset_type, 'value') else asset_type
     if is_cash_like(t, asset_id):
         return "cash"
-    if t in (AssetType.FUND.value, AssetType.CN_FUND.value, AssetType.US_FUND.value, AssetType.HK_FUND.value, "fund", "cn_fund", "us_fund", "hk_fund"):
+    if t in (
+        AssetType.FUND.value,
+        AssetType.EXCHANGE_FUND.value,
+        AssetType.OTC_FUND.value,
+        AssetType.CN_FUND.value,
+        AssetType.US_FUND.value,
+        AssetType.HK_FUND.value,
+        "fund",
+        "exchange_fund",
+        "otc_fund",
+        "cn_fund",
+        "us_fund",
+        "hk_fund",
+    ):
         return "fund"
     if t in (AssetType.A_STOCK.value, AssetType.HK_STOCK.value, AssetType.US_STOCK.value,
              AssetType.BOND.value, AssetType.CRYPTO.value,

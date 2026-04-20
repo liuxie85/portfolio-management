@@ -3,6 +3,7 @@ from unittest.mock import Mock
 from src.app.reporting_service import ReportingService
 from src.models import AssetType, Holding, Industry, PortfolioValuation
 from src.portfolio import PortfolioManager
+from src.reporting_utils import normalize_asset_type
 
 
 def test_reporting_service_asset_distribution_uses_manager_valuation():
@@ -39,6 +40,11 @@ def test_reporting_service_asset_distribution_returns_empty_for_zero_value():
     service = ReportingService(manager=manager, storage=storage)
 
     assert service.get_asset_distribution("a") == {}
+
+
+def test_normalize_asset_type_treats_split_funds_as_fund():
+    assert normalize_asset_type(AssetType.EXCHANGE_FUND, "510300") == "fund"
+    assert normalize_asset_type(AssetType.OTC_FUND, "110022") == "fund"
 
 
 def test_reporting_service_industry_distribution_with_price_and_cny_fallback():

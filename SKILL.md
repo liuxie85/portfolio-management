@@ -35,14 +35,14 @@ from skill_api import (
 )
 ```
 
-- `get_price(code)`：查询价格或汇率。
-- `get_holdings(include_price=True, group_by_market=True)`：查询持仓。
-- `buy(code, name, quantity, price, **kwargs)`：记录买入。
-- `sell(code, quantity, price, **kwargs)`：记录卖出。
-- `deposit(amount, **kwargs)` / `withdraw(amount, **kwargs)`：记录出入金。
-- `sync_futu_cash_mmf(dry_run=True)`：通过富途 OpenAPI 同步现金/货基余额到 holdings。
-- `record_nav()`：记录 NAV，并写入 holdings snapshot。
-- `full_report()`：生成完整报告。
+- `get_price(code, account=None)`：查询价格或汇率。
+- `get_holdings(include_price=True, group_by_market=True, account=None)`：查询持仓。
+- `buy(code, name, quantity, price, account=None, **kwargs)`：记录买入。
+- `sell(code, quantity, price, account=None, **kwargs)`：记录卖出。
+- `deposit(amount, account=None, **kwargs)` / `withdraw(amount, account=None, **kwargs)`：记录出入金。
+- `sync_futu_cash_mmf(dry_run=True, account=None)`：通过富途 OpenAPI 同步现金/货基余额到 holdings。
+- `record_nav(account=None)`：记录 NAV，并写入 holdings snapshot。
+- `full_report(account=None)`：生成完整报告。
 
 写入类操作必须明确账户、日期、券商/平台、币种、手续费等关键字段；不确定时先 dry-run 或询问。
 

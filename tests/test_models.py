@@ -17,6 +17,8 @@ class TestAssetType:
         assert AssetType.HK_STOCK.value == "hk_stock"
         assert AssetType.US_STOCK.value == "us_stock"
         assert AssetType.FUND.value == "fund"
+        assert AssetType.EXCHANGE_FUND.value == "exchange_fund"
+        assert AssetType.OTC_FUND.value == "otc_fund"
         assert AssetType.CASH.value == "cash"
         assert AssetType.MMF.value == "mmf"
         assert AssetType.CRYPTO.value == "crypto"

@@ -1248,6 +1248,94 @@ class PortfolioSkill:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def init_nav_history(
+        self,
+        date_str: str = None,
+        price_timeout: int = 30,
+        dry_run: bool = True,
+        confirm: bool = False,
+        use_bulk_persist: bool = False,
+    ) -> Dict[str, Any]:
+        """为新账户初始化第一条 nav_history。
+
+        该入口只服务“已有 holdings、尚无 nav_history”的账户：
+        - 若账户已有任意 nav_history，直接拒绝，避免污染历史。
+        - 第一条记录会自然得到 nav=1.0、shares=total_value。
+        - 默认 dry_run=True；真实写入必须 dry_run=False 且 confirm=True。
+        """
+        try:
+            nav_date = parse_date(date_str) if date_str else bj_today()
+
+            if (not dry_run) and (not confirm):
+                return {
+                    "success": False,
+                    "error": "Refuse to initialize nav_history without confirm=True (safety guard).",
+                    "account": self.account,
+                    "date": nav_date.isoformat(),
+                    "dry_run": dry_run,
+                    "confirm": confirm,
+                }
+
+            existing_navs = self.storage.get_nav_history(self.account, days=9999)
+            if existing_navs:
+                latest = max(existing_navs, key=lambda n: n.date)
+                earliest = min(existing_navs, key=lambda n: n.date)
+                return {
+                    "success": False,
+                    "error": "nav_history already exists; initialization is only for empty accounts.",
+                    "account": self.account,
+                    "existing_count": len(existing_navs),
+                    "earliest_date": earliest.date.isoformat(),
+                    "latest_date": latest.date.isoformat(),
+                    "dry_run": dry_run,
+                }
+
+            snapshot = self.build_snapshot()
+            valuation = snapshot["valuation"]
+            if valuation.total_value_cny <= 0:
+                return {
+                    "success": False,
+                    "error": "Cannot initialize nav_history with non-positive total_value.",
+                    "account": self.account,
+                    "date": nav_date.isoformat(),
+                    "total_value": valuation.total_value_cny,
+                    "warnings": valuation.warnings,
+                }
+
+            nav_record = self.portfolio.record_nav(
+                self.account,
+                valuation=valuation,
+                nav_date=nav_date,
+                persist=True,
+                overwrite_existing=False,
+                dry_run=dry_run,
+                use_bulk_persist=use_bulk_persist,
+            )
+
+            result = {
+                "success": True,
+                "account": self.account,
+                "date": nav_date.isoformat(),
+                "dry_run": dry_run,
+                "nav": nav_record.nav,
+                "shares": nav_record.shares,
+                "total_value": nav_record.total_value,
+                "cash_value": nav_record.cash_value,
+                "stock_value": nav_record.stock_value,
+                "fund_value": nav_record.fund_value,
+                "snapshot_time": snapshot.get("snapshot_time"),
+                "message": (
+                    f"已演练初始化 {self.account} 的 nav_history: {nav_record.nav:.4f}"
+                    if dry_run
+                    else f"已初始化 {self.account} 的 nav_history: {nav_record.nav:.4f}"
+                ),
+            }
+            if valuation.warnings:
+                result["warnings"] = valuation.warnings
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e), "account": self.account}
+
     def _calc_risk_metrics(self, navs) -> tuple:
         """计算风险指标：波动率和最大回撤"""
         import statistics
@@ -1516,6 +1604,23 @@ def record_nav(price_timeout: int = 30, dry_run: bool = True, confirm: bool = Fa
         dry_run=dry_run,
         confirm=confirm,
         overwrite_existing=overwrite_existing,
+        use_bulk_persist=use_bulk_persist,
+    )
+
+
+def init_nav_history(date_str: str = None, price_timeout: int = 30, dry_run: bool = True,
+                     confirm: bool = False, use_bulk_persist: bool = False,
+                     account: str = None) -> Dict:
+    """为新账户初始化第一条 nav_history。
+
+    ⚠️ 默认 dry_run=True，且只允许空 nav_history 账户初始化。
+    真正写入必须传：dry_run=False 且 confirm=True。
+    """
+    return get_skill(account).init_nav_history(
+        date_str=date_str,
+        price_timeout=price_timeout,
+        dry_run=dry_run,
+        confirm=confirm,
         use_bulk_persist=use_bulk_persist,
     )
 

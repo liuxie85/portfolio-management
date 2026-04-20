@@ -152,13 +152,12 @@ def detect_asset_type(code: str) -> Tuple[AssetType, str, AssetClass]:
         # treat as CN asset; distinguish stock/fund by base prefix
         b = base
         if b.startswith(('6', '5')):
-            # 5xxxxx are ETFs (fund) but still CN asset class; keep A_STOCK vs FUND as before
             if b.startswith('5'):
-                return AssetType.FUND, 'CNY', AssetClass.CN_ASSET
+                return AssetType.EXCHANGE_FUND, 'CNY', AssetClass.CN_ASSET
             return AssetType.A_STOCK, 'CNY', AssetClass.CN_ASSET
         # SZ
         if b.startswith('15'):
-            return AssetType.FUND, 'CNY', AssetClass.CN_ASSET
+            return AssetType.EXCHANGE_FUND, 'CNY', AssetClass.CN_ASSET
         return AssetType.A_STOCK, 'CNY', AssetClass.CN_ASSET
 
     # 标准化后判断
@@ -175,9 +174,9 @@ def detect_asset_type(code: str) -> Tuple[AssetType, str, AssetClass]:
             return AssetType.A_STOCK, 'CNY', AssetClass.CN_ASSET
         # 场内ETF：沪市(51x) + 深市(15x)
         if normalized.startswith('5') or normalized.startswith('15'):
-            return AssetType.FUND, 'CNY', AssetClass.CN_ASSET
+            return AssetType.EXCHANGE_FUND, 'CNY', AssetClass.CN_ASSET
         # 其余6位数字 -> 场外基金
-        return AssetType.FUND, 'CNY', AssetClass.CN_ASSET
+        return AssetType.OTC_FUND, 'CNY', AssetClass.CN_ASSET
 
     # 非数字 -> 美股
     return AssetType.US_STOCK, 'USD', AssetClass.US_ASSET

@@ -20,12 +20,14 @@ It is the only entry point that may collect daily-report data. `generate_daily_r
 cd /home/node/.openclaw/workspace/portfolio-management
 . .venv/bin/activate
 python scripts/publish_daily_report.py
+python scripts/publish_daily_report.py --account alice
 ```
 
 ## Useful options
 
 ```bash
 python scripts/publish_daily_report.py \
+  --account alice \
   --account-label lx \
   --reports-dir ./reports \
   --publish-root ../prototypes
@@ -38,6 +40,7 @@ python scripts/publish_daily_report.py \
 ## Notes
 
 - `--account-label` is display-only.
+- `--account` controls which portfolio account is loaded; if omitted, the script uses `PORTFOLIO_ACCOUNT` / `config.json` default.
 - `OPENCLAW_PUBLISH_BASE_URL` 用于生成 `public_url` 字段（可选）。
 - 出于安全考虑：脚本不会再从 `OPENCLAW_INSTANCE_ID` 推导默认 URL；没有配置则不输出可访问 URL（仅输出 slug）。
 - This script is intentionally split into three layers:
