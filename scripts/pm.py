@@ -96,6 +96,23 @@ def cmd_report(args):
     _dump(res, args.json)
 
 
+def cmd_init_nav(args):
+    if not bool(args.confirm) and not bool(args.dry_run):
+        raise SystemExit("init-nav write requires --confirm. Re-run with --dry-run or add --confirm.")
+
+    from skill_api import init_nav_history
+
+    res = init_nav_history(
+        date_str=args.date,
+        price_timeout=args.timeout,
+        dry_run=bool(args.dry_run),
+        confirm=bool(args.confirm),
+        use_bulk_persist=bool(args.use_bulk_persist),
+        account=args.account,
+    )
+    _dump(res, args.json)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="pm", description="portfolio-management CLI")
     p.add_argument("--json", action="store_true", help="output JSON")
@@ -131,6 +148,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--account", default=None, help="account to operate on; defaults to config/PORTFOLIO_ACCOUNT")
     p_rep.add_argument("--json", action="store_true", help="output JSON")
     p_rep.set_defaults(func=cmd_report)
+
+    p_init_nav = sp.add_parser("init-nav", help="initialize first nav_history row for a new account")
+    p_init_nav.add_argument("--date", default=None, help="nav date (YYYY-MM-DD); defaults to today")
+    p_init_nav.add_argument("--timeout", type=int, default=30, help="price timeout seconds (default 30)")
+    p_init_nav.add_argument("--dry-run", action="store_true", default=True, help="preview only (default)")
+    p_init_nav.add_argument("--write", dest="dry_run", action="store_false", help="actually write nav_history")
+    p_init_nav.add_argument("--confirm", action="store_true", help="required with --write")
+    p_init_nav.add_argument("--use-bulk-persist", action="store_true", help="use nav_history bulk upsert path")
+    p_init_nav.add_argument("--account", default=None, help="account to operate on; defaults to config/PORTFOLIO_ACCOUNT")
+    p_init_nav.add_argument("--json", action="store_true", help="output JSON")
+    p_init_nav.set_defaults(func=cmd_init_nav)
 
     return p
 

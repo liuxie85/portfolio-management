@@ -101,6 +101,8 @@ def main() -> None:
         test_pm_report_requires_preview_flag,
         test_pm_report_preview_marks_noncanonical_output,
         test_pm_cash_passes_account,
+        test_pm_init_nav_passes_account_and_write_flags,
+        test_pm_init_nav_write_requires_confirm,
     )
     from tests.test_daily_report_entrypoints import (
         test_generate_daily_report_html_is_renderer_only,
@@ -151,6 +153,8 @@ def main() -> None:
         test_pm_report_requires_preview_flag,
         test_pm_report_preview_marks_noncanonical_output,
         test_pm_cash_passes_account,
+        test_pm_init_nav_passes_account_and_write_flags,
+        test_pm_init_nav_write_requires_confirm,
         test_generate_daily_report_html_is_renderer_only,
         test_publish_daily_report_returns_renderer_bundle_shape,
         test_publish_daily_report_build_report_data_passes_account,

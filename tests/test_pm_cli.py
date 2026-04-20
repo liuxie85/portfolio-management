@@ -72,3 +72,41 @@ def test_pm_cash_passes_account():
     out = json.loads(stdout.getvalue())
     assert out["success"] is True
     assert out["account"] == "bob"
+
+
+def test_pm_init_nav_passes_account_and_write_flags():
+    fake_skill_api = types.SimpleNamespace(
+        init_nav_history=lambda **kwargs: {
+            "success": True,
+            "account": kwargs["account"],
+            "date": kwargs["date_str"],
+            "dry_run": kwargs["dry_run"],
+            "confirm": kwargs["confirm"],
+        }
+    )
+    stdout = io.StringIO()
+    with _SysModulesPatch("skill_api", fake_skill_api), redirect_stdout(stdout):
+        assert pm.main([
+            "init-nav",
+            "--account", "sy",
+            "--date", "2026-04-20",
+            "--write",
+            "--confirm",
+            "--json",
+        ]) == 0
+
+    out = json.loads(stdout.getvalue())
+    assert out["success"] is True
+    assert out["account"] == "sy"
+    assert out["date"] == "2026-04-20"
+    assert out["dry_run"] is False
+    assert out["confirm"] is True
+
+
+def test_pm_init_nav_write_requires_confirm():
+    try:
+        pm.main(["init-nav", "--account", "hb", "--write"])
+    except SystemExit as exc:
+        assert "--confirm" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit")
