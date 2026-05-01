@@ -15,6 +15,9 @@ _CONFIG_FILE = _PROJECT_ROOT / "config.json"
 # 模块级缓存，避免重复读文件
 _cached_config: Optional[dict] = None
 
+_TRUE_VALUES = {"1", "true", "yes", "y", "on"}
+_FALSE_VALUES = {"0", "false", "no", "n", "off"}
+
 
 def _load_config_file() -> dict:
     """从 config.json 加载配置"""
@@ -60,6 +63,19 @@ def get(key: str, default=None):
         "service.port": "PORTFOLIO_SERVICE_PORT",
         "service.url": "PORTFOLIO_SERVICE_URL",
         "nav.disable_runtime_validation": "PORTFOLIO_NAV_DISABLE_RUNTIME_VALIDATION",
+        "report.account_label": "PM_REPORT_ACCOUNT_LABEL",
+        "report.reports_dir": "PM_REPORTS_DIR",
+        "report.publish_root": "PM_PUBLISH_ROOT",
+        "report.publish_base_url": "OPENCLAW_PUBLISH_BASE_URL",
+        "report.sync_futu_cash_mmf": "PM_SYNC_FUTU_CASH_MMF",
+        "report.sync_futu_dry_run": "PM_SYNC_FUTU_DRY_RUN",
+        "report.disable_nav_runtime_validation": "PM_DISABLE_NAV_RUNTIME_VALIDATION",
+        "futu.opend.host": "FUTU_OPEND_HOST",
+        "futu.opend.port": "FUTU_OPEND_PORT",
+        "futu.trd_env": "FUTU_TRD_ENV",
+        "futu.acc_id": "FUTU_ACC_ID",
+        "futu.trd_market": "FUTU_TRD_MARKET",
+        "futu.cash_currency": "FUTU_CASH_CURRENCY",
         "feishu.app_token": "FEISHU_APP_TOKEN",
         "feishu.app_id": "FEISHU_APP_ID",
         "feishu.app_secret": "FEISHU_APP_SECRET",
@@ -94,6 +110,35 @@ def get(key: str, default=None):
     return node if node != "" else default
 
 
+def get_bool(key: str, default: bool = False) -> bool:
+    """获取布尔配置值，支持 env/config 中常见字符串表示。"""
+    value = get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+
+    normalized = str(value).strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES or normalized == "":
+        return False
+    return default
+
+
+def get_int(key: str, default: Optional[int] = None) -> Optional[int]:
+    """获取整数配置值；缺失或无法解析时返回 default。"""
+    value = get(key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ========== 常用配置的便捷访问 ==========
 
 def get_account() -> str:
@@ -109,8 +154,7 @@ def get_initial_value() -> float:
 
 def get_start_year() -> int:
     """获取收益统计起始年份"""
-    val = get("start_year")
-    return int(val) if val is not None else 2024
+    return get_int("start_year", 2024) or 2024
 
 
 def get_project_root() -> Path:
@@ -137,8 +181,7 @@ def get_service_host() -> str:
 
 def get_service_port() -> int:
     """获取本地 HTTP 服务端口。"""
-    val = get("service.port", 8765)
-    return int(val)
+    return get_int("service.port", 8765) or 8765
 
 
 def get_service_url() -> str:

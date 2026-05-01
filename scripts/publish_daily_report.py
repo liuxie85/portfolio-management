@@ -16,6 +16,8 @@ WORKSPACE = REPO_ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src import config as app_config
+
 # NOTE: use skill instance to reuse a single snapshot (avoid repeated price fetch).
 
 
@@ -29,21 +31,30 @@ class PublishConfig:
     publish_base_url: Optional[str] = None
 
 
-def env_flag(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value in ("1", "true", "TRUE", "yes", "YES")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Record NAV, render daily report HTML, and publish it to a static directory.")
     parser.add_argument("--account", default=None, help="Account to operate on. Defaults to config/PORTFOLIO_ACCOUNT.")
-    parser.add_argument("--account-label", default=os.environ.get("PM_REPORT_ACCOUNT_LABEL", "lx"), help="Display-only account label shown in the HTML report.")
-    parser.add_argument("--reports-dir", default=str(REPO_ROOT / "reports"), help="Directory for generated HTML report files.")
-    parser.add_argument("--publish-root", default=str(WORKSPACE / "prototypes"), help="Root directory for published static pages.")
-    # SECURITY: do not embed real publish URLs in repo history. Use env var only.
-    parser.add_argument("--publish-base-url", default=os.environ.get("OPENCLAW_PUBLISH_BASE_URL"), help="Base publish URL (set via env OPENCLAW_PUBLISH_BASE_URL).")
+    parser.add_argument(
+        "--account-label",
+        default=app_config.get("report.account_label", app_config.get_account()),
+        help="Display-only account label shown in the HTML report.",
+    )
+    parser.add_argument(
+        "--reports-dir",
+        default=str(app_config.get("report.reports_dir", str(REPO_ROOT / "reports"))),
+        help="Directory for generated HTML report files.",
+    )
+    parser.add_argument(
+        "--publish-root",
+        default=str(app_config.get("report.publish_root", str(WORKSPACE / "prototypes"))),
+        help="Root directory for published static pages.",
+    )
+    # SECURITY: do not embed real publish URLs in repo history. Use config/env secrets only.
+    parser.add_argument(
+        "--publish-base-url",
+        default=app_config.get("report.publish_base_url"),
+        help="Base publish URL (config report.publish_base_url or env OPENCLAW_PUBLISH_BASE_URL).",
+    )
     parser.add_argument("--price-timeout", type=int, default=30, help="Price fetch timeout in seconds.")
     parser.add_argument("--dry-run", action="store_true", help="Do not persist NAV writes.")
     parser.add_argument("--use-bulk-nav-upsert", action="store_true", help="Persist NAV through storage.upsert_nav_bulk (single-row use is optional).")
@@ -53,9 +64,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug-internal", action="store_true", help="Do not suppress internal stdout prints (debug only).")
     parser.add_argument(
         "--sync-futu-cash-mmf",
+        dest="sync_futu_cash_mmf",
         action="store_true",
-        default=os.environ.get("PM_SYNC_FUTU_CASH_MMF") in ("1", "true", "TRUE", "yes", "YES"),
         help="Sync Futu cash/MMF balances into holdings before building the report snapshot.",
+    )
+    parser.add_argument(
+        "--no-sync-futu-cash-mmf",
+        dest="sync_futu_cash_mmf",
+        action="store_false",
+        help="Disable Futu cash/MMF sync even if enabled in config/env.",
     )
     parser.add_argument(
         "--sync-futu-dry-run",
@@ -69,13 +86,16 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Actually write Futu cash/MMF holdings when --sync-futu-cash-mmf is set.",
     )
-    parser.set_defaults(sync_futu_dry_run=env_flag("PM_SYNC_FUTU_DRY_RUN", True))
+    parser.set_defaults(
+        sync_futu_cash_mmf=app_config.get_bool("report.sync_futu_cash_mmf", False),
+        sync_futu_dry_run=app_config.get_bool("report.sync_futu_dry_run", True),
+    )
     return parser.parse_args()
 
 
 def resolve_publish_base_url(explicit: Optional[str]) -> Optional[str]:
     # SECURITY: Never derive or hardcode publish URLs in the repo.
-    # If you want public URLs, set OPENCLAW_PUBLISH_BASE_URL in runtime secrets.
+    # If you want public URLs, set report.publish_base_url via config/env secrets.
     if explicit:
         return explicit.rstrip("/")
     return None
@@ -320,7 +340,7 @@ def main() -> None:
 
     # Speed: scheduled daily report can skip expensive NAV runtime validation.
     # Enable only for this script via env var to avoid impacting other entry points.
-    if os.environ.get("PM_DISABLE_NAV_RUNTIME_VALIDATION") in ("1", "true", "TRUE", "yes", "YES"):
+    if app_config.get_bool("report.disable_nav_runtime_validation", False):
         os.environ["PORTFOLIO_NAV_DISABLE_RUNTIME_VALIDATION"] = "1"
 
     timings: dict[str, int] = {}

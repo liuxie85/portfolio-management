@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
+from pytest import MonkeyPatch
+
+from src import config
 from src.app import FutuBalanceSnapshot, FutuBalanceSyncService
 from src.app.futu_balance_sync_service import FutuOpenApiBalanceProvider
 from src.models import AssetType, Holding
@@ -141,6 +147,48 @@ def test_futu_openapi_provider_reads_mmf_from_accinfo_fund_assets():
     assert provider._fetch_cash(futu_sdk, ctx) == 12.345
     assert provider._fetch_mmf(futu_sdk, ctx) == 345.68
     assert ctx.position_called is False
+
+
+def test_futu_openapi_provider_reads_defaults_from_config_file():
+    with TemporaryDirectory() as tmp:
+        config_file = Path(tmp) / "config.json"
+        config_file.write_text(
+            json.dumps({
+                "futu": {
+                    "opend": {"host": "10.0.0.2", "port": 22222},
+                    "trd_env": "SIMULATE",
+                    "acc_id": 123456,
+                    "trd_market": "US",
+                    "cash_currency": "USD",
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        patch = MonkeyPatch()
+        try:
+            patch.setattr(config, "_CONFIG_FILE", config_file)
+            for name in (
+                "FUTU_OPEND_HOST",
+                "FUTU_OPEND_PORT",
+                "FUTU_TRD_ENV",
+                "FUTU_ACC_ID",
+                "FUTU_TRD_MARKET",
+                "FUTU_CASH_CURRENCY",
+            ):
+                patch.delenv(name, raising=False)
+            config.reload_config()
+
+            provider = FutuOpenApiBalanceProvider()
+            assert provider.host == "10.0.0.2"
+            assert provider.port == 22222
+            assert provider.trd_env == "SIMULATE"
+            assert provider.acc_id == 123456
+            assert provider.trd_market == "US"
+            assert provider.cash_currency == "USD"
+        finally:
+            patch.undo()
+            config.reload_config()
 
 
 def test_portfolio_skill_futu_sync_defaults_to_dry_run(monkeypatch):

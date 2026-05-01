@@ -32,16 +32,16 @@ python scripts/publish_daily_report.py \
   --reports-dir ./reports \
   --publish-root ../prototypes
 
-# 如果需要生成可访问的 URL，请在运行环境里设置：
-#   export OPENCLAW_PUBLISH_BASE_URL="https://<your-private-domain-or-gateway>"
-# 注意：不要把真实 URL 写进仓库（避免泄漏）。
+# These defaults can also be configured under report.* in config.json.
+# Keep real public URLs in runtime env or an untracked config.json.
 ```
 
 ## Notes
 
 - `--account-label` is display-only.
 - `--account` controls which portfolio account is loaded; if omitted, the script uses `PORTFOLIO_ACCOUNT` / `config.json` default.
-- `OPENCLAW_PUBLISH_BASE_URL` 用于生成 `public_url` 字段（可选）。
+- `report.publish_base_url` / `OPENCLAW_PUBLISH_BASE_URL` 用于生成 `public_url` 字段（可选）。
+- `report.sync_futu_cash_mmf` / `PM_SYNC_FUTU_CASH_MMF` controls scheduled Futu cash/MMF sync; CLI flags still override config.
 - 出于安全考虑：脚本不会再从 `OPENCLAW_INSTANCE_ID` 推导默认 URL；没有配置则不输出可访问 URL（仅输出 slug）。
 - This script is intentionally split into three layers:
   - data collection: `build_report_data(...)`

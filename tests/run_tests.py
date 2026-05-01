@@ -126,6 +126,13 @@ def main() -> None:
         test_generate_daily_report_html_is_renderer_only,
         test_publish_daily_report_returns_renderer_bundle_shape,
         test_publish_daily_report_build_report_data_passes_account,
+        test_publish_daily_report_parse_args_uses_config_defaults_and_cli_overrides,
+    )
+    from tests.test_futu_balance_sync_service import (
+        test_futu_openapi_provider_reads_defaults_from_config_file,
+    )
+    from tests.test_config import (
+        test_config_typed_getters_use_file_then_env_overrides,
     )
 
     tests = [
@@ -186,6 +193,9 @@ def main() -> None:
         test_generate_daily_report_html_is_renderer_only,
         test_publish_daily_report_returns_renderer_bundle_shape,
         test_publish_daily_report_build_report_data_passes_account,
+        test_publish_daily_report_parse_args_uses_config_defaults_and_cli_overrides,
+        test_futu_openapi_provider_reads_defaults_from_config_file,
+        test_config_typed_getters_use_file_then_env_overrides,
     ]
     for t in tests:
         t()

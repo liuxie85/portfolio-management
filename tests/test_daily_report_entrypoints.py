@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 import sys
 import types
+from tempfile import TemporaryDirectory
+
+from pytest import MonkeyPatch
 
 from scripts import publish_daily_report
 
@@ -163,3 +167,60 @@ def test_publish_daily_report_futu_sync_defaults_to_dry_run():
 
     assert bundle["futu_sync_result"] == {"success": True, "dry_run": True}
     assert calls == [("sync_futu_cash_mmf", True)]
+
+
+def test_publish_daily_report_parse_args_uses_config_defaults_and_cli_overrides():
+    with TemporaryDirectory() as tmp:
+        config_file = Path(tmp) / "config.json"
+        config_file.write_text(
+            json.dumps({
+                "account": "cfg-account",
+                "report": {
+                    "account_label": "family",
+                    "reports_dir": "out/reports",
+                    "publish_root": "out/publish",
+                    "publish_base_url": "https://example.test/base/",
+                    "sync_futu_cash_mmf": True,
+                    "sync_futu_dry_run": False,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        patch = MonkeyPatch()
+        try:
+            patch.setattr(publish_daily_report.app_config, "_CONFIG_FILE", config_file)
+            for name in (
+                "PM_REPORT_ACCOUNT_LABEL",
+                "PM_REPORTS_DIR",
+                "PM_PUBLISH_ROOT",
+                "OPENCLAW_PUBLISH_BASE_URL",
+                "PM_SYNC_FUTU_CASH_MMF",
+                "PM_SYNC_FUTU_DRY_RUN",
+            ):
+                patch.delenv(name, raising=False)
+            publish_daily_report.app_config.reload_config()
+
+            patch.setattr(sys, "argv", ["publish_daily_report.py"])
+            args = publish_daily_report.parse_args()
+            assert args.account_label == "family"
+            assert args.reports_dir == "out/reports"
+            assert args.publish_root == "out/publish"
+            assert args.publish_base_url == "https://example.test/base/"
+            assert args.sync_futu_cash_mmf is True
+            assert args.sync_futu_dry_run is False
+
+            patch.setattr(sys, "argv", [
+                "publish_daily_report.py",
+                "--account-label",
+                "manual",
+                "--no-sync-futu-cash-mmf",
+                "--sync-futu-dry-run",
+            ])
+            args = publish_daily_report.parse_args()
+            assert args.account_label == "manual"
+            assert args.sync_futu_cash_mmf is False
+            assert args.sync_futu_dry_run is True
+        finally:
+            patch.undo()
+            publish_daily_report.app_config.reload_config()

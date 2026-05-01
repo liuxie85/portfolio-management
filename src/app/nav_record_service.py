@@ -152,7 +152,7 @@ class NavRecordService:
             **calc,
         )
 
-        if not bool(config.get("nav.disable_runtime_validation", False)):
+        if not config.get_bool("nav.disable_runtime_validation", False):
             self.manager._validate_nav_record(
                 nav_record=nav_record,
                 last_nav=last_nav,

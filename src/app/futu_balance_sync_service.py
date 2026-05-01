@@ -1,11 +1,11 @@
 """Sync Futu cash-like balances into holdings."""
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Iterable, Optional, Protocol
 
+from src import config
 from src.models import (
     AssetType,
     CASH_ASSET_ID,
@@ -65,12 +65,12 @@ class FutuOpenApiBalanceProvider:
         cash_currency: Optional[str] = None,
         mmf_codes: Optional[Iterable[str]] = None,
     ):
-        self.host = host or os.environ.get("FUTU_OPEND_HOST", "127.0.0.1")
-        self.port = int(port or os.environ.get("FUTU_OPEND_PORT", "11111"))
-        self.trd_env = trd_env or os.environ.get("FUTU_TRD_ENV", "REAL")
-        self.acc_id = int(acc_id) if acc_id is not None else _env_int("FUTU_ACC_ID")
-        self.trd_market = trd_market or os.environ.get("FUTU_TRD_MARKET", "HK")
-        self.cash_currency = cash_currency or os.environ.get("FUTU_CASH_CURRENCY", "CNH")
+        self.host = host or config.get("futu.opend.host", "127.0.0.1")
+        self.port = int(port if port is not None else (config.get_int("futu.opend.port", 11111) or 11111))
+        self.trd_env = trd_env or config.get("futu.trd_env", "REAL")
+        self.acc_id = int(acc_id) if acc_id is not None else config.get_int("futu.acc_id")
+        self.trd_market = trd_market or config.get("futu.trd_market", "HK")
+        self.cash_currency = cash_currency or config.get("futu.cash_currency", "CNH")
         # Kept for constructor compatibility. MMF balance is authoritative from
         # accinfo.fund_assets, not position code matching.
         self._legacy_mmf_codes = tuple(mmf_codes or ())
@@ -241,11 +241,6 @@ class FutuBalanceSyncService:
             created=synced["created"],
             updated=synced["updated"],
         )]
-
-
-def _env_int(name: str) -> Optional[int]:
-    value = os.environ.get(name)
-    return int(value) if value else None
 
 
 def _rows(data: Any) -> list[dict[str, Any]]:

@@ -3,13 +3,34 @@
   "initial_value": 0,
   "start_year": 2024,
   "storage": {
-    "backend": "auto",
-    "sqlite_path": ".data/portfolio.db"
+    "backend": "auto"
+  },
+  "nav": {
+    "disable_runtime_validation": false
   },
   "service": {
     "host": "127.0.0.1",
     "port": 8765,
     "url": ""
+  },
+  "report": {
+    "account_label": "lx",
+    "reports_dir": "reports",
+    "publish_root": "../prototypes",
+    "publish_base_url": "",
+    "sync_futu_cash_mmf": false,
+    "sync_futu_dry_run": true,
+    "disable_nav_runtime_validation": false
+  },
+  "futu": {
+    "opend": {
+      "host": "127.0.0.1",
+      "port": 11111
+    },
+    "trd_env": "REAL",
+    "acc_id": null,
+    "trd_market": "HK",
+    "cash_currency": "CNH"
   },
   "finnhub_api_key": "",
   "feishu": {

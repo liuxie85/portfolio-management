@@ -47,6 +47,11 @@ HTTP 服务默认只允许绑定 `127.0.0.1`/`localhost`/`::1`。该服务当前
 - `FEISHU_TABLE_COMPENSATION_TASKS`
 - `FEISHU_TABLE_SCHEMA_VERSION`
 - `PORTFOLIO_SERVICE_URL`（可选，默认 `http://127.0.0.1:8765`）
+- `PM_REPORT_ACCOUNT_LABEL` / `report.account_label`（日报展示账户名）
+- `OPENCLAW_PUBLISH_BASE_URL` / `report.publish_base_url`（发布后的公开 URL 前缀）
+- `FUTU_OPEND_HOST` / `futu.opend.host`、`FUTU_OPEND_PORT` / `futu.opend.port`（可选，富途 OpenD 同步）
+
+配置统一从 `src/config.py` 读取：命令行参数优先，其次环境变量，再其次 `config.json`，最后使用默认值。真实密钥和生产路径仍建议放在仓外 `config.json` 或运行环境变量中。
 
 ## Linux 部署约定
 
