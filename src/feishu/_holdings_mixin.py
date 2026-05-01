@@ -151,16 +151,21 @@ class HoldingsMixin:
         )
 
         count = 0
+        complete_projection = True
         for record in records:
             fields = self._from_feishu_fields(record.get('fields') or {}, 'holdings')
+            if not fields.get('asset_id'):
+                complete_projection = False
+            if account and not fields.get('account'):
+                fields['account'] = account
             fields['record_id'] = record['record_id']
             holding = self._dict_to_holding(fields)
             self._put_holding_cache(holding)
             count += 1
 
-        if account:
+        if account and complete_projection:
             self._holdings_index_loaded_accounts.add(account)
-        else:
+        elif not account and complete_projection:
             self._holdings_index_loaded_all = True
 
         self._flush_persistent_holdings_index()
@@ -220,6 +225,12 @@ class HoldingsMixin:
                     break
 
         fields = self._from_feishu_fields(selected.get('fields') or {}, 'holdings')
+        if asset_id and not fields.get('asset_id'):
+            fields['asset_id'] = asset_id
+        if account and not fields.get('account'):
+            fields['account'] = account
+        if broker is not None and fields.get('broker') is None:
+            fields['broker'] = broker
         fields['record_id'] = selected['record_id']
         holding = self._dict_to_holding(fields)
         self._put_holding_cache(holding)
@@ -268,6 +279,8 @@ class HoldingsMixin:
         holdings = []
         for record in records:
             fields = self._from_feishu_fields(record.get('fields') or {}, 'holdings')
+            if account and not fields.get('account'):
+                fields['account'] = account
             fields['record_id'] = record['record_id']
             holding = self._dict_to_holding(fields)
             self._put_holding_cache(holding)

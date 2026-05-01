@@ -17,7 +17,7 @@ def _feishu_healthcheck(storage: FeishuStorage) -> None:
     )
 
 
-def create_storage(prefer: Optional[str] = None):
+def create_storage(prefer: Optional[str] = None, *, healthcheck: bool = True):
     """创建存储后端。
 
     兼容历史参数：prefer / storage.backend 仍可传入，但只接受 feishu/auto。
@@ -32,5 +32,6 @@ def create_storage(prefer: Optional[str] = None):
         raise ValueError(f"不支持的 storage.backend={backend}：当前仅支持 feishu/auto")
 
     storage = FeishuStorage()
-    _feishu_healthcheck(storage)
+    if healthcheck:
+        _feishu_healthcheck(storage)
     return storage

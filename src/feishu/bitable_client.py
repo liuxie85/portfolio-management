@@ -238,9 +238,12 @@ class BitableClient:
         _retry_count: int = 0,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        self._client.rate_limit()
+        rate_limit = getattr(self._client, "rate_limit", None) or getattr(self._client, "_rate_limit", None)
+        if callable(rate_limit):
+            rate_limit()
         url = f"{self._client.BASE_URL}{endpoint}"
-        headers = self._client.get_headers()
+        get_headers = getattr(self._client, "get_headers", None) or getattr(self._client, "_get_headers", None)
+        headers = get_headers() if callable(get_headers) else {}
 
         request_kwargs = dict(kwargs)
         request_kwargs.setdefault("timeout", self._client.request_timeout)

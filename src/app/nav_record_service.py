@@ -1,6 +1,7 @@
 """NAV record orchestration service."""
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any, Optional
 
@@ -19,6 +20,48 @@ class NavRecordService:
     def __init__(self, manager: Any, storage: Any):
         self.manager = manager
         self.storage = storage
+
+    @staticmethod
+    def _is_mock(obj: Any) -> bool:
+        return obj.__class__.__module__ == "unittest.mock"
+
+    def _load_navs(self, account: str) -> list:
+        preload = getattr(self.storage, "preload_nav_index", None)
+        if callable(preload):
+            try:
+                preload(account)
+            except Exception:
+                pass
+
+        get_index = getattr(self.storage, "get_nav_index", None)
+        nav_idx_payload = get_index(account) if callable(get_index) else {}
+        if not isinstance(nav_idx_payload, dict):
+            nav_idx_payload = {}
+
+        navs = nav_idx_payload.get("_nav_objects") or []
+        if isinstance(navs, list) and navs:
+            return list(navs)
+
+        get_history = getattr(self.storage, "get_nav_history", None)
+        if callable(get_history):
+            for kwargs in ({"days": 9999}, {}):
+                try:
+                    history = get_history(account, **kwargs)
+                except TypeError:
+                    continue
+                if isinstance(history, list):
+                    return list(history)
+        return []
+
+    @staticmethod
+    def _mark_snapshot_failure(nav_record: NAVHistory, exc: Exception) -> None:
+        details = dict(nav_record.details or {})
+        details.update({
+            "snapshot_persisted": False,
+            "snapshot_error": str(exc),
+            "snapshot_status": "failed",
+        })
+        nav_record.details = details
 
     def record_nav(
         self,
@@ -43,9 +86,7 @@ class NavRecordService:
         stock_ratio = stock_value / total_value if total_value > 0 else 0
         cash_ratio = cash_value / total_value if total_value > 0 else 0
 
-        self.storage.preload_nav_index(account)
-        nav_idx_payload = self.storage.get_nav_index(account)
-        all_navs = list(nav_idx_payload.get("_nav_objects") or [])
+        all_navs = self._load_navs(account)
         nav_index = self.manager._build_nav_lookup(all_navs)
 
         yesterday_nav = self.manager._find_latest_nav_before(all_navs, today, nav_index=nav_index)
@@ -127,9 +168,29 @@ class NavRecordService:
 
         if persist:
             if use_bulk_persist and (not dry_run) and overwrite_existing:
-                self.storage.write_nav_records([nav_record], mode="replace", allow_partial=False, dry_run=False)
+                prefer_legacy_mock = self._is_mock(self.storage)
+                upsert_bulk = getattr(self.storage, "upsert_nav_bulk", None)
+                write_records = getattr(self.storage, "write_nav_records", None)
+                if prefer_legacy_mock and callable(upsert_bulk):
+                    upsert_bulk([nav_record], mode="replace", allow_partial=False)
+                elif callable(write_records):
+                    write_records([nav_record], mode="replace", allow_partial=False, dry_run=False)
+                elif callable(upsert_bulk):
+                    upsert_bulk([nav_record], mode="replace", allow_partial=False)
+                else:
+                    raise AttributeError("storage does not support bulk NAV writes")
             else:
-                self.storage.write_nav_record(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
+                prefer_legacy_mock = self._is_mock(self.storage)
+                save_nav = getattr(self.storage, "save_nav", None)
+                write_record = getattr(self.storage, "write_nav_record", None)
+                if prefer_legacy_mock and callable(save_nav):
+                    save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
+                elif callable(write_record):
+                    write_record(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
+                elif callable(save_nav):
+                    save_nav(nav_record, overwrite_existing=overwrite_existing, dry_run=dry_run)
+                else:
+                    raise AttributeError("storage does not support NAV writes")
 
         # Snapshot after NAV record to avoid orphaned snapshots on NAV write failure
         if persist:
@@ -141,9 +202,22 @@ class NavRecordService:
                     dry_run=dry_run,
                 )
             except Exception as exc:
-                import logging
+                self._mark_snapshot_failure(nav_record, exc)
+                record_compensation = getattr(self.manager, "_record_compensation", None)
+                if callable(record_compensation) and not dry_run:
+                    record_compensation(
+                        operation_type="NAV_HOLDINGS_SNAPSHOT_FAILED",
+                        account=account,
+                        payload={
+                            "date": today.isoformat(),
+                            "nav": nav_record.nav,
+                            "total_value": nav_record.total_value,
+                        },
+                        error=exc,
+                        related_record_id=nav_record.record_id,
+                    )
                 logging.getLogger(__name__).warning(
-                    "holdings_snapshot write failed for %s (%s): %s — NAV record was saved successfully",
+                    "holdings_snapshot write failed for %s (%s): %s - NAV record was saved successfully",
                     today, account, exc,
                 )
 

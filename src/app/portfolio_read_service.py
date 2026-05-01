@@ -60,7 +60,11 @@ class PortfolioReadService:
         include_cash: bool = True,
         group_by_market: bool = False,
         include_price: bool = False,
+        group_by_broker: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        if group_by_broker is not None:
+            group_by_market = group_by_broker
+
         if include_price:
             snapshot = self.build_snapshot()
             holdings_data = snapshot.get("holdings_data") or {}
@@ -141,15 +145,15 @@ class PortfolioReadService:
             result["holdings"] = holdings
             return result
 
-        by_broker = {}
+        by_market = {}
         for holding in holdings:
             broker = holding.get("broker") or "未指定券商"
-            by_broker.setdefault(broker, []).append(holding)
+            by_market.setdefault(broker, []).append(holding)
 
         if include_price:
             market_values = {
                 market: sum((item.get("market_value") or 0) for item in items)
-                for broker, items in by_broker.items()
+                for market, items in by_market.items()
             }
             sorted_markets = sorted(by_market.keys(), key=lambda m: market_values[m], reverse=True)
             result["by_market"] = {m: by_market[m] for m in sorted_markets}

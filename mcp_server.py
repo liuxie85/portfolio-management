@@ -19,6 +19,9 @@ sys.path.insert(0, str(SKILL_DIR))
 
 from mcp.server.fastmcp import FastMCP
 
+from src import config
+from src.service.client import PortfolioServiceClient, PortfolioServiceUnavailable
+
 from skill_api import (
     get_skill,
     buy,
@@ -33,6 +36,8 @@ from skill_api import (
     get_return,
     get_cash,
     get_price,
+    list_accounts,
+    multi_account_overview,
     record_nav,
     close_nav,
     generate_report,
@@ -51,6 +56,18 @@ mcp = FastMCP(
 
 
 # ========== 交易类 Tools ==========
+
+
+def _account_or_default(account: str = None) -> str:
+    return account or config.get_account()
+
+
+def _service_or_fallback(service_call, fallback_call):
+    try:
+        client = PortfolioServiceClient(timeout=0.5)
+        return service_call(client)
+    except PortfolioServiceUnavailable:
+        return fallback_call()
 
 
 @mcp.tool()
@@ -208,6 +225,48 @@ def tool_record_transaction_from_message(
 
 
 @mcp.tool()
+def tool_list_accounts(include_default: bool = True) -> str:
+    """列出当前数据集中出现过的账户。
+
+    Args:
+        include_default: 是否包含配置中的默认账户，即使该账户暂无数据。
+    """
+    result = _service_or_fallback(
+        lambda client: client.list_accounts(include_default=include_default),
+        lambda: list_accounts(include_default=include_default),
+    )
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+def tool_multi_account_overview(
+    accounts: str = None,
+    price_timeout: int = 30,
+    include_details: bool = False,
+) -> str:
+    """获取多账户只读资产概览。
+
+    Args:
+        accounts: 逗号分隔的账户列表；为空时自动发现账户。
+        price_timeout: 单账户报告的价格获取超时（秒）
+        include_details: 是否返回每个账户的完整 full_report 明细。
+    """
+    result = _service_or_fallback(
+        lambda client: client.multi_account_overview(
+            accounts=accounts,
+            price_timeout=price_timeout,
+            include_details=include_details,
+        ),
+        lambda: multi_account_overview(
+            accounts=accounts,
+            price_timeout=price_timeout,
+            include_details=include_details,
+        ),
+    )
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
 def tool_get_holdings(
     include_cash: bool = True,
     group_by_market: bool = False,
@@ -222,11 +281,19 @@ def tool_get_holdings(
         include_price: 是否包含实时价格
         account: 账户标识，默认使用配置中的默认账户
     """
-    result = get_holdings(
-        account=account,
-        include_cash=include_cash,
-        group_by_market=group_by_market,
-        include_price=include_price,
+    result = _service_or_fallback(
+        lambda client: client.get_holdings(
+            account=_account_or_default(account),
+            include_cash=include_cash,
+            group_by_market=group_by_market,
+            include_price=include_price,
+        ),
+        lambda: get_holdings(
+            account=account,
+            include_cash=include_cash,
+            group_by_market=group_by_market,
+            include_price=include_price,
+        ),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 
@@ -272,7 +339,10 @@ def tool_get_cash(account: str = None) -> str:
     Args:
         account: 账户标识，默认使用配置中的默认账户
     """
-    result = get_cash(account=account)
+    result = _service_or_fallback(
+        lambda client: client.get_cash(account=_account_or_default(account)),
+        lambda: get_cash(account=account),
+    )
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
@@ -287,7 +357,10 @@ def tool_get_nav(days: int = 30, account: str = None) -> str:
         days: 获取最近 N 天历史，默认 30
         account: 账户标识，默认使用配置中的默认账户
     """
-    result = get_nav(days=days, account=account)
+    result = _service_or_fallback(
+        lambda client: client.get_nav(account=_account_or_default(account), days=days),
+        lambda: get_nav(days=days, account=account),
+    )
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
@@ -389,12 +462,27 @@ def tool_generate_report(
         price_timeout: 价格获取超时（秒）
         account: 账户标识，默认使用配置中的默认账户
     """
-    result = generate_report(
-        report_type=report_type,
-        record_nav=record_nav,
-        price_timeout=price_timeout,
-        account=account,
-    )
+    if record_nav:
+        result = generate_report(
+            report_type=report_type,
+            record_nav=record_nav,
+            price_timeout=price_timeout,
+            account=account,
+        )
+    else:
+        result = _service_or_fallback(
+            lambda client: client.generate_report(
+                account=_account_or_default(account),
+                report_type=report_type,
+                price_timeout=price_timeout,
+            ),
+            lambda: generate_report(
+                report_type=report_type,
+                record_nav=False,
+                price_timeout=price_timeout,
+                account=account,
+            ),
+        )
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
@@ -403,7 +491,7 @@ def tool_generate_report(
 
 @mcp.tool()
 def tool_sync_futu_cash_mmf(
-    dry_run: bool = False,
+    dry_run: bool = True,
     cash_balance: float = None,
     mmf_balance: float = None,
     account: str = None,
@@ -413,7 +501,7 @@ def tool_sync_futu_cash_mmf(
     可手动传入余额跳过 API 调用。
 
     Args:
-        dry_run: 预览模式
+        dry_run: 预览模式，默认 True；设为 False 才写入 holdings
         cash_balance: 手动指定现金余额（跳过 API）
         mmf_balance: 手动指定货基余额（跳过 API）
         account: 账户标识，默认使用配置中的默认账户

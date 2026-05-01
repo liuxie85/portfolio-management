@@ -1,11 +1,15 @@
 # Portfolio Management — Project Map
 
-This repo is designed to be operated by an agent (Skill) and a human.
+This repo is designed to be operated as an HTTP service, with Skill/MCP/CLI
+adapters kept for automation and compatibility.
 Keep docs short, executable, and reality-checked.
 
 ## Core entrypoints
 
-- Skill API (primary surface): `skill_api.py`
+- HTTP service (primary surface): `src/service/http.py`
+- Service runner: `scripts/serve.py`
+- Service API notes: `docs/service.md`
+- Skill API (compatibility adapter): `skill_api.py`
 - Storage backend (Feishu only): `src/feishu_storage.py` + `src/feishu_client.py`
 - Portfolio logic: `src/portfolio.py`
 - Pricing + caching: `src/price_fetcher.py` + `src/market_time.py`
@@ -43,6 +47,11 @@ Keep docs short, executable, and reality-checked.
 
 - Environment doctor (deps + network + Feishu sanity):
   - `python scripts/doctor.py`
+
+- Run HTTP service:
+  - `python scripts/service.py start`
+  - `python scripts/service.py status`
+  - Non-loopback binds require `--allow-remote`; the service is otherwise local-only and unauthenticated.
 
 - Schema checks:
   - `python scripts/migrate_schema.py check-live`

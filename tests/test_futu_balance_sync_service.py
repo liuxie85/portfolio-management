@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from src.app import FutuBalanceSnapshot, FutuBalanceSyncService
 from src.app.futu_balance_sync_service import FutuOpenApiBalanceProvider
 from src.models import AssetType, Holding
+from skill_api import PortfolioSkill
 
 
 class FakeProvider:
@@ -23,11 +24,11 @@ class FakeStorage:
         self.creates = []
 
     def get_holding(self, asset_id, account, broker=None):
-        return self.holdings.get((asset_id, account, market))
+        return self.holdings.get((asset_id, account, broker))
 
     def update_holding_quantity(self, asset_id, account, quantity_change, broker=None):
-        self.updates.append((asset_id, account, quantity_change, market))
-        holding = self.holdings[(asset_id, account, market)]
+        self.updates.append((asset_id, account, quantity_change, broker))
+        holding = self.holdings[(asset_id, account, broker)]
         holding.quantity += quantity_change
 
     def upsert_holding(self, holding):
@@ -140,3 +141,27 @@ def test_futu_openapi_provider_reads_mmf_from_accinfo_fund_assets():
     assert provider._fetch_cash(futu_sdk, ctx) == 12.345
     assert provider._fetch_mmf(futu_sdk, ctx) == 345.68
     assert ctx.position_called is False
+
+
+def test_portfolio_skill_futu_sync_defaults_to_dry_run(monkeypatch):
+    calls = []
+
+    class FakeService:
+        def __init__(self, storage):
+            self.storage = storage
+
+        def sync_cash_and_mmf(self, **kwargs):
+            calls.append(kwargs)
+            return {"success": True, "dry_run": kwargs["dry_run"]}
+
+    import skill_api
+
+    monkeypatch.setattr(skill_api, "FutuBalanceSyncService", FakeService)
+    skill = PortfolioSkill.__new__(PortfolioSkill)
+    skill.account = "lx"
+    skill.storage = object()
+
+    result = skill.sync_futu_cash_mmf()
+
+    assert result == {"success": True, "dry_run": True}
+    assert calls[0]["dry_run"] is True

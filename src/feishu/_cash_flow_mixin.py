@@ -52,9 +52,8 @@ class CashFlowMixin:
 
     def get_cash_flow(self, record_id: str) -> Optional[CashFlow]:
         """获取单条出入金记录"""
-        try:
-            record = self.client.get_record_strict('cash_flow', record_id)
-        except Exception:
+        record = self._read_record('cash_flow', record_id)
+        if not record:
             return None
 
         fields = self._from_feishu_fields(record['fields'], 'cash_flow')
@@ -100,9 +99,11 @@ class CashFlowMixin:
 
         for record in records:
             fields = self._from_feishu_fields(record.get('fields') or {}, 'cash_flow')
-            cf = self._dict_to_cash_flow({**fields, 'record_id': record['record_id']})
-            if not cf.flow_date:
+            if not fields.get('flow_date'):
+                amount = fields.get('cny_amount') if fields.get('cny_amount') is not None else fields.get('amount', 0)
+                cumulative += self._to_decimal(amount or 0)
                 continue
+            cf = self._dict_to_cash_flow({**fields, 'record_id': record.get('record_id')})
             amount = cf.cny_amount if cf.cny_amount is not None else cf.amount
             amount_dec = self._to_decimal(amount or 0)
             amount_float = float(amount_dec)

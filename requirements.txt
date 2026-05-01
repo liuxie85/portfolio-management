@@ -1,6 +1,10 @@
 # 数据验证
 pydantic>=2.0.0
 
+# HTTP Service（src/service/http.py 中使用）
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
 # 价格获取
 requests>=2.28.0
 pytz>=2023.3

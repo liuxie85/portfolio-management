@@ -12,10 +12,10 @@ def test_to_feishu_fields_quantizes_numeric_payloads():
         'amount': 1.015,
         'quantity': 1.005,
     }, 'transactions')
-    assert tx_fields['price'] == '1.01'
-    assert tx_fields['fee'] == '0.01'
-    assert tx_fields['amount'] == '1.02'
-    assert tx_fields['quantity'] == '1.005'
+    assert tx_fields['price'] == 1.01
+    assert tx_fields['fee'] == 0.01
+    assert tx_fields['amount'] == 1.02
+    assert tx_fields['quantity'] == 1.005
 
     nav_fields = storage._to_feishu_fields({
         'mtd_nav_change': 0.1234567,

@@ -14,6 +14,12 @@ class ValuationService:
         self.storage = storage
         self.price_fetcher = price_fetcher
 
+    @staticmethod
+    def _price_field(price_payload: Any, key: str, default: Any = None) -> Any:
+        if isinstance(price_payload, dict):
+            return price_payload.get(key, default)
+        return getattr(price_payload, key, default)
+
     def calculate_valuation(
         self,
         account: str,
@@ -128,6 +134,8 @@ class ValuationService:
         for holding in holdings:
             price = price_lookup.get(holding.asset_id) or price_lookup.get(str(holding.asset_id).strip().upper(), {})
             normalized_type = normalize_holding_type(holding)
+            price_value = self._price_field(price, "price")
+            has_price = price_value is not None
 
             if price and isinstance(price, dict):
                 if price.get("is_from_cache"):
@@ -136,6 +144,8 @@ class ValuationService:
                     price_meta["from_realtime"] += 1
                 if price.get("source") == "cache_fallback" or price.get("is_stale"):
                     price_meta["stale_fallback"] += 1
+            elif price and has_price:
+                price_meta["from_cache"] += 1
             else:
                 price_meta["missing"] += 1
 
@@ -147,9 +157,10 @@ class ValuationService:
 
             quantity_dec = self.manager._to_decimal(holding.quantity)
 
-            if price and "price" in price:
-                price_dec = self.manager._to_decimal(price["price"])
-                cny_price_dec = self.manager._to_decimal(price.get("cny_price", price["price"]))
+            if price and has_price:
+                cny_price = self._price_field(price, "cny_price", price_value)
+                price_dec = self.manager._to_decimal(price_value)
+                cny_price_dec = self.manager._to_decimal(cny_price)
                 holding.current_price = float(price_dec)
                 holding.cny_price = float(cny_price_dec)
                 market_value_dec = self.manager._quantize_money(quantity_dec * cny_price_dec)

@@ -53,7 +53,7 @@ class TestFeishuStorageFieldConversion:
         assert result['tag'] == json.dumps(['银行', '金融'], ensure_ascii=False)
 
     def test_to_feishu_fields_transactions(self):
-        """测试交易表字段转换（文本类型）"""
+        """测试交易表字段转换（数字类型）"""
         data = {
             'asset_id': '000001',
             'quantity': 100,
@@ -63,10 +63,10 @@ class TestFeishuStorageFieldConversion:
         }
         result = self.storage._to_feishu_fields(data, 'transactions')
 
-        assert result['quantity'] == '100'  # 文本类型
-        assert result['price'] == '10.5'
-        assert result['amount'] == '1050.0'
-        assert result['fee'] == '5.0'
+        assert result['quantity'] == 100
+        assert result['price'] == 10.5
+        assert result['amount'] == 1050.0
+        assert result['fee'] == 5.0
 
     def test_to_feishu_fields_dates(self):
         """测试日期字段转换为 Unix 时间戳（毫秒）"""
@@ -756,6 +756,7 @@ class TestFeishuStorageNAVOperations:
             date=date(2025, 3, 14),
             account='测试账户',
             total_value=1000000.0,
+            shares=1000000.0,
             nav=1.0
         )
 

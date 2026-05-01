@@ -37,7 +37,9 @@ class NavMixin:
         for record in records:
             raw_fields = record.get('fields') or {}
             fields = self._from_feishu_fields(raw_fields, 'nav_history')
-            fields['record_id'] = record['record_id']
+            if account and not fields.get('account'):
+                fields['account'] = account
+            fields['record_id'] = record.get('record_id')
             nav = self._dict_to_nav(fields)
             if not nav.date:
                 continue
@@ -194,6 +196,16 @@ class NavMixin:
     def get_nav_index(self, account: str) -> Dict[str, any]:
         self._ensure_nav_index_loaded(account)
         return self._nav_index_mem_cache.get(account) or {}
+
+    def _get_indexed_navs(self, account: str) -> List[NAVHistory]:
+        idx = self.get_nav_index(account)
+        navs: List[NAVHistory] = list(idx.get('_nav_objects') or [])
+        if navs:
+            return navs
+
+        self.preload_nav_index(account, force_refresh=True)
+        idx = self.get_nav_index(account)
+        return list(idx.get('_nav_objects') or [])
 
     def _invalidate_nav_index(self, account: str):
         self._nav_index_loaded_accounts.discard(account)
@@ -597,8 +609,7 @@ class NavMixin:
 
     def get_latest_nav(self, account: str) -> Optional[NAVHistory]:
         """获取最新净值记录（优先索引）。"""
-        idx = self.get_nav_index(account)
-        navs = idx.get('_nav_objects') or []
+        navs = self._get_indexed_navs(account)
         return navs[-1] if navs else None
 
     def get_nav_on_date(self, account: str, nav_date: date) -> Optional[NAVHistory]:
@@ -608,8 +619,7 @@ class NavMixin:
         elif isinstance(nav_date, str):
             nav_date = datetime.strptime(nav_date[:10], '%Y-%m-%d').date()
 
-        idx = self.get_nav_index(account)
-        navs = idx.get('_nav_objects') or []
+        navs = self._get_indexed_navs(account)
         matches = [n for n in navs if n.date == nav_date]
 
         if len(matches) > 1:
@@ -657,7 +667,7 @@ class NavMixin:
 
     def get_latest_nav_before(self, account: str, before_date: date) -> Optional[NAVHistory]:
         """获取指定日期之前的最新净值记录（优先索引）。"""
-        navs = self.get_nav_index(account).get('_nav_objects') or []
+        navs = self._get_indexed_navs(account)
         candidates = [n for n in navs if n.date and n.date < before_date]
         candidates.sort(key=lambda n: n.date, reverse=True)
         return candidates[0] if candidates else None

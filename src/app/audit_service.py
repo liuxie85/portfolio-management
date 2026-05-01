@@ -15,11 +15,12 @@ from src.time_utils import bj_today, bj_now_naive
 class AuditService:
     """Audit and repair nav_history derived fields."""
 
-    def __init__(self, *, storage: Any, portfolio: Any, account: str, report_dir: Path):
+    def __init__(self, *, storage: Any, portfolio: Any, account: str, report_dir: Path, api: Any = None):
         self.storage = storage
         self.portfolio = portfolio
         self.account = account
         self.report_dir = report_dir
+        self.api = api
 
     # ------------------------------------------------------------------
     # helpers
@@ -288,10 +289,20 @@ class AuditService:
     def audit_nav_history_accuracy(self, account: Optional[str] = None, days: int = 900, write_report: bool = True) -> Dict[str, Any]:
         """统一准确性审计入口：汇总 metrics / reconcile / repair candidates。"""
         audit_account = account or self.account
-        metrics = self.audit_nav_history_metrics(account=audit_account, days=days, write_report=False)
+        metrics_func = getattr(self.api, 'audit_nav_history_metrics', None) if self.api is not None else None
+        reconcile_func = getattr(self.api, 'audit_nav_history_reconcile', None) if self.api is not None else None
+        metrics = (
+            metrics_func(account=audit_account, days=days, write_report=False)
+            if callable(metrics_func)
+            else self.audit_nav_history_metrics(account=audit_account, days=days, write_report=False)
+        )
         if not metrics.get('success'):
             return metrics
-        reconcile = self.audit_nav_history_reconcile(account=audit_account, days=days, write_report=False)
+        reconcile = (
+            reconcile_func(account=audit_account, days=days, write_report=False)
+            if callable(reconcile_func)
+            else self.audit_nav_history_reconcile(account=audit_account, days=days, write_report=False)
+        )
         if not reconcile.get('success'):
             return reconcile
 
@@ -347,7 +358,12 @@ class AuditService:
 
     def repair_nav_history_metrics(self, account: Optional[str] = None, days: int = 900, dry_run: bool = True, write_report: bool = True) -> Dict[str, Any]:
         """按统一准确性审计结果修复 nav_history 派生字段；仅修复真正 anomaly，默认 dry_run。"""
-        accuracy = self.audit_nav_history_accuracy(account=account, days=days, write_report=False)
+        accuracy_func = getattr(self.api, 'audit_nav_history_accuracy', None) if self.api is not None else None
+        accuracy = (
+            accuracy_func(account=account, days=days, write_report=False)
+            if callable(accuracy_func)
+            else self.audit_nav_history_accuracy(account=account, days=days, write_report=False)
+        )
         if not accuracy.get("success"):
             return accuracy
 

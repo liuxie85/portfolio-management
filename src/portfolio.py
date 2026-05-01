@@ -30,6 +30,9 @@ from .domain import NavCalculator, NavHistoryIndex, PayloadNormalizer
 from . import config
 
 
+_DEFAULT_PRICE_FETCHER = object()
+
+
 class PortfolioManager:
     """组合管理器"""
 
@@ -37,9 +40,9 @@ class PortfolioManager:
     NAV_QUANT = Decimal('0.000001')
     WEIGHT_QUANT = Decimal('0.000001')
 
-    def __init__(self, storage: Any, price_fetcher: Optional[PriceFetcher] = None):
+    def __init__(self, storage: Any, price_fetcher: Optional[PriceFetcher] = _DEFAULT_PRICE_FETCHER):
         self.storage = storage
-        self.price_fetcher = price_fetcher or PriceFetcher(storage=storage)
+        self.price_fetcher = PriceFetcher(storage=storage) if price_fetcher is _DEFAULT_PRICE_FETCHER else price_fetcher
         self.asset_name_service = AssetNameService(manager=self)
         self.compensation = CompensationService(storage=storage)
         self.cash_service = CashService(storage=storage)

@@ -6,6 +6,11 @@
     "backend": "auto",
     "sqlite_path": ".data/portfolio.db"
   },
+  "service": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "url": ""
+  },
   "finnhub_api_key": "",
   "feishu": {
     "app_id": "",

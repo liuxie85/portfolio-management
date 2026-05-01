@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 
 from src.time_utils import bj_today, bj_now_naive
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Iterable, List
 
 # 确保能 import 到 src 模块
 SKILL_DIR = Path(__file__).parent.resolve()
@@ -38,6 +38,76 @@ from src import config
 # ========== 配置 ==========
 
 DEFAULT_ACCOUNT = config.get_account()
+
+
+def _iter_account_values(value: Any) -> Iterable[str]:
+    """Yield normalized account strings from raw storage/client field shapes."""
+    if value is None:
+        return
+    if isinstance(value, str):
+        account = value.strip()
+        if account:
+            yield account
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_account_values(item)
+        return
+    if isinstance(value, dict):
+        for key in ("text", "name", "value"):
+            if key in value:
+                yield from _iter_account_values(value.get(key))
+        return
+
+    account = str(value).strip()
+    if account:
+        yield account
+
+
+def _normalize_accounts(accounts: Any) -> Optional[List[str]]:
+    """Normalize account input from Python callers, CLI comma strings, or MCP JSON."""
+    if accounts is None:
+        return None
+    if isinstance(accounts, str):
+        raw_items = accounts.split(",")
+    elif isinstance(accounts, (list, tuple, set)):
+        raw_items = list(accounts)
+    else:
+        raw_items = [accounts]
+
+    normalized: List[str] = []
+    seen = set()
+    for item in raw_items:
+        for account in _iter_account_values(item):
+            if account not in seen:
+                seen.add(account)
+                normalized.append(account)
+    return normalized
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _round_money(value: float) -> float:
+    return round(float(value or 0.0), 2)
+
+
+def _snapshot_failure(nav_record: NAVHistory) -> Optional[Dict[str, Any]]:
+    details = getattr(nav_record, "details", None) or {}
+    snapshot_error = details.get("snapshot_error")
+    if not snapshot_error:
+        return None
+    return {
+        "snapshot_status": details.get("snapshot_status") or "failed",
+        "snapshot_persisted": bool(details.get("snapshot_persisted")),
+        "snapshot_error": snapshot_error,
+    }
 
 
 # ========== 核心 API 类 ==========
@@ -72,23 +142,34 @@ class PortfolioSkill:
         """按统一准确性审计结果修复 nav_history 派生字段；仅修复真正 anomaly，默认 dry_run。"""
         return self._audit_service.repair_nav_history_metrics(account=account, days=days, dry_run=dry_run, write_report=write_report)
 
-    def __init__(self, account: str = DEFAULT_ACCOUNT, feishu_client: FeishuClient = None):
+    def __init__(
+        self,
+        account: str = DEFAULT_ACCOUNT,
+        feishu_client: FeishuClient = None,
+        storage: Optional[FeishuStorage] = None,
+        portfolio: Optional[PortfolioManager] = None,
+        price_fetcher: Optional[PriceFetcher] = None,
+    ):
         """
         初始化 Skill
 
         Args:
             account: 账户标识，默认 "lx"
             feishu_client: 飞书客户端实例（可选，用于自定义配置）
+            storage: 存储实例（可选，用于测试或离线注入）
+            portfolio: PortfolioManager 实例（可选，用于测试或离线注入）
+            price_fetcher: 价格获取器实例（可选）
         """
         self.account = account
-        self.storage = FeishuStorage(feishu_client) if feishu_client else create_storage()
-        self.portfolio = PortfolioManager(self.storage)
-        self.price_fetcher = PriceFetcher(storage=self.storage)
+        self.storage = storage or (FeishuStorage(feishu_client) if feishu_client else create_storage(healthcheck=False))
+        self.portfolio = portfolio or PortfolioManager(self.storage)
+        self.price_fetcher = price_fetcher or PriceFetcher(storage=self.storage)
         self._audit_service = AuditService(
             storage=self.storage,
             portfolio=self.portfolio,
             account=account,
             report_dir=SKILL_DIR / 'audit',
+            api=self,
         )
 
     # ---------- 交易记录 ----------
@@ -385,6 +466,71 @@ class PortfolioSkill:
             )
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def list_accounts(self, include_default: bool = True) -> Dict[str, Any]:
+        """发现当前数据集中出现过的账户。
+
+        账户来源保持只读：优先从 holdings 的存储 API 获取，再轻量读取交易、
+        现金流和净值表中的 account 字段。任一来源失败时返回 warning，不阻断
+        其他来源和默认账户。
+        """
+        accounts = set()
+        sources: Dict[str, List[str]] = {}
+        warnings = []
+
+        def remember(source: str, account_values: Iterable[str]) -> None:
+            source_accounts = set()
+            for account in account_values:
+                if not account:
+                    continue
+                accounts.add(account)
+                source_accounts.add(account)
+            sources[source] = sorted(source_accounts)
+
+        try:
+            get_holdings_fn = getattr(self.storage, "get_holdings")
+            try:
+                holdings = get_holdings_fn(account=None, include_empty=True)
+            except TypeError:
+                holdings = get_holdings_fn(account=None)
+            remember("holdings", (getattr(h, "account", None) for h in holdings or []))
+        except Exception as e:
+            warnings.append({"source": "holdings", "error": str(e)})
+
+        client = getattr(self.storage, "client", None)
+        list_records = getattr(client, "list_records", None)
+        if callable(list_records):
+            for table in ("transactions", "cash_flow", "nav_history"):
+                try:
+                    records = list_records(table, field_names=["account"])
+                    values = []
+                    for record in records or []:
+                        raw_fields = record.get("fields") or {}
+                        fields = raw_fields
+                        convert_fields = getattr(self.storage, "_from_feishu_fields", None)
+                        if callable(convert_fields):
+                            try:
+                                fields = convert_fields(raw_fields, table)
+                            except Exception:
+                                fields = raw_fields
+                        values.extend(_iter_account_values(fields.get("account")))
+                    remember(table, values)
+                except Exception as e:
+                    warnings.append({"source": table, "error": str(e)})
+
+        if include_default and self.account:
+            accounts.add(self.account)
+
+        result = {
+            "success": True,
+            "default_account": self.account,
+            "accounts": sorted(accounts),
+            "count": len(accounts),
+            "sources": sources,
+        }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def _read_service(self) -> PortfolioReadService:
         return PortfolioReadService(
@@ -723,13 +869,13 @@ class PortfolioSkill:
     def sync_futu_cash_mmf(
         self,
         broker: str = "富途",
-        dry_run: bool = False,
+        dry_run: bool = True,
         cash_balance: float = None,
         mmf_balance: float = None,
     ) -> Dict[str, Any]:
         """通过富途 OpenAPI 同步现金/货基余额到 holdings。
 
-        默认使用真实富途 SDK；测试或人工校准可传入 cash_balance/mmf_balance 跳过 API。
+        默认预览不写入；测试或人工校准可传入 cash_balance/mmf_balance 跳过 API。
         """
         try:
             service = FutuBalanceSyncService(self.storage)
@@ -1244,6 +1390,17 @@ class PortfolioSkill:
                 result["storage"] = storage_result
             if valuation.warnings:
                 result["warnings"] = valuation.warnings
+            failure = _snapshot_failure(nav_record)
+            if failure:
+                result.update(failure)
+                result["success"] = False
+                result["status"] = "failed" if dry_run else "partial"
+                result["error"] = failure["snapshot_error"]
+                result["message"] = (
+                    f"净值已演练，但 holdings_snapshot 写入校验失败: {failure['snapshot_error']}"
+                    if dry_run
+                    else f"净值已写入，但 holdings_snapshot 写入失败: {failure['snapshot_error']}"
+                )
             return result
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1332,6 +1489,17 @@ class PortfolioSkill:
             }
             if valuation.warnings:
                 result["warnings"] = valuation.warnings
+            failure = _snapshot_failure(nav_record)
+            if failure:
+                result.update(failure)
+                result["success"] = False
+                result["status"] = "failed" if dry_run else "partial"
+                result["error"] = failure["snapshot_error"]
+                result["message"] = (
+                    f"初始化已演练，但 holdings_snapshot 写入校验失败: {failure['snapshot_error']}"
+                    if dry_run
+                    else f"nav_history 已初始化，但 holdings_snapshot 写入失败: {failure['snapshot_error']}"
+                )
             return result
         except Exception as e:
             return {"success": False, "error": str(e), "account": self.account}
@@ -1549,6 +1717,10 @@ def get_distribution(account: str = None) -> Dict:
     """资产分布"""
     return get_skill(account).get_distribution()
 
+def list_accounts(include_default: bool = True) -> Dict:
+    """列出当前数据集中出现过的账户。"""
+    return get_skill().list_accounts(include_default=include_default)
+
 # 净值收益
 def get_nav(days: int = 30, account: str = None) -> Dict:
     """账户净值
@@ -1591,6 +1763,132 @@ def full_report(price_timeout: int = 30, account: str = None) -> Dict:
         price_timeout: 价格获取超时时间（秒），默认30秒
     """
     return get_skill(account).full_report(price_timeout=price_timeout)
+
+
+def _report_value_breakdown(report: Dict[str, Any]) -> Dict[str, float]:
+    overview = report.get("overview") or {}
+    total_value = _as_float(overview.get("total_value"), 0.0)
+
+    cash_ratio = _as_float(overview.get("cash_ratio"), 0.0)
+    stock_ratio = _as_float(overview.get("stock_ratio"), 0.0)
+    fund_ratio = _as_float(overview.get("fund_ratio"), 0.0)
+
+    nav = report.get("nav") or {}
+    if cash_ratio == 0 and stock_ratio == 0 and fund_ratio == 0 and total_value:
+        cash_value = _as_float(nav.get("cash_value"), 0.0)
+        stock_value = _as_float(nav.get("stock_value"), 0.0)
+        fund_value = _as_float(nav.get("fund_value"), 0.0)
+    else:
+        cash_value = total_value * cash_ratio
+        stock_value = total_value * stock_ratio
+        fund_value = total_value * fund_ratio
+
+    return {
+        "total_value": _round_money(total_value),
+        "cash_value": _round_money(cash_value),
+        "stock_value": _round_money(stock_value),
+        "fund_value": _round_money(fund_value),
+        "non_cash_value": _round_money(stock_value + fund_value),
+    }
+
+
+def multi_account_overview(accounts: Any = None, price_timeout: int = 30,
+                           include_details: bool = False) -> Dict:
+    """生成多个账户的只读资产概览。
+
+    Args:
+        accounts: 账户列表，或逗号分隔字符串；为空时自动发现账户。
+        price_timeout: 传给单账户 full_report 的价格超时时间。
+        include_details: 是否在每个账户条目中附带完整 full_report。
+    """
+    try:
+        target_accounts = _normalize_accounts(accounts)
+        discovery = None
+        if target_accounts is None:
+            discovery = list_accounts(include_default=True)
+            if not discovery.get("success"):
+                return discovery
+            target_accounts = discovery.get("accounts") or []
+
+        items = []
+        errors = []
+        summary_values = {
+            "total_value": 0.0,
+            "cash_value": 0.0,
+            "stock_value": 0.0,
+            "fund_value": 0.0,
+            "non_cash_value": 0.0,
+        }
+
+        for account in target_accounts:
+            report = get_skill(account).full_report(price_timeout=price_timeout)
+            if not report.get("success"):
+                error = {
+                    "account": account,
+                    "error": report.get("error") or report.get("message") or "unknown error",
+                }
+                errors.append(error)
+                items.append({"account": account, "success": False, **error})
+                continue
+
+            values = _report_value_breakdown(report)
+            for key in summary_values:
+                summary_values[key] += values[key]
+
+            item = {
+                "account": account,
+                "success": True,
+                **values,
+                "overview": report.get("overview") or {},
+                "nav": report.get("nav"),
+                "returns": report.get("returns") or {},
+            }
+            if include_details:
+                item["report"] = report
+            items.append(item)
+
+        successful_count = sum(1 for item in items if item.get("success"))
+        failed_count = len(errors)
+        total_value = summary_values["total_value"]
+        summary = {key: _round_money(value) for key, value in summary_values.items()}
+        summary.update({
+            "cash_ratio": summary["cash_value"] / total_value if total_value > 0 else 0,
+            "stock_ratio": summary["stock_value"] / total_value if total_value > 0 else 0,
+            "fund_ratio": summary["fund_value"] / total_value if total_value > 0 else 0,
+        })
+
+        if not target_accounts:
+            status = "empty"
+            success = True
+        elif successful_count == 0:
+            status = "failed"
+            success = False
+        elif failed_count:
+            status = "partial"
+            success = True
+        else:
+            status = "ok"
+            success = True
+
+        result = {
+            "success": success,
+            "status": status,
+            "generated_at": bj_now_naive().isoformat(),
+            "default_account": DEFAULT_ACCOUNT,
+            "accounts": target_accounts,
+            "account_count": len(target_accounts),
+            "successful_count": successful_count,
+            "failed_count": failed_count,
+            "summary": summary,
+            "items": items,
+        }
+        if discovery is not None:
+            result["discovery"] = discovery
+        if errors:
+            result["errors"] = errors
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 def record_nav(price_timeout: int = 30, dry_run: bool = True, confirm: bool = False,
                overwrite_existing: bool = True, use_bulk_persist: bool = False, account: str = None) -> Dict:

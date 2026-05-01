@@ -875,12 +875,14 @@ class TestPortfolioManagerNAVRecord:
         assert result == 2317869.76
 
     def test_get_initial_value_no_history(self):
-        """测试无历史记录时使用默认值"""
+        """测试无历史记录时使用配置默认值"""
+        from src import config
+
         self.mock_storage.get_nav_history.return_value = []
 
         result = self.manager._get_initial_value('测试账户')
 
-        assert result == 2317869.76  # 默认值
+        assert result == (config.get_initial_value() or None)
 
     def test_calc_period_return(self):
         """测试通用区间收益率计算"""
@@ -974,7 +976,7 @@ class TestPortfolioManagerNAVRecord:
             details={'cumulative_appreciation': 0.0},
         )
 
-        with pytest.raises(ValueError, match='total_value 不等于 stock_value \+ cash_value'):
+        with pytest.raises(ValueError, match=r'total_value 不等于 stock_value \+ cash_value'):
             self.manager._validate_nav_record(nav_record=nav_record)
 
 

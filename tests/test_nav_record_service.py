@@ -1,6 +1,7 @@
 from datetime import date
 from unittest.mock import Mock
 
+from skill_api import PortfolioSkill
 from src.app.nav_record_service import NavRecordService
 from src.models import NAVHistory, PortfolioValuation
 from src.portfolio import PortfolioManager
@@ -31,6 +32,7 @@ def _storage():
 def _manager(storage):
     manager = PortfolioManager(storage=storage, price_fetcher=Mock())
     manager.snapshot_service = Mock()
+    manager._record_compensation = Mock()
     manager._print_nav_summary = Mock()
     return manager
 
@@ -79,25 +81,58 @@ def test_nav_record_service_uses_bulk_persist_when_requested():
     manager._print_nav_summary.assert_called_once()
 
 
-def test_nav_record_service_wraps_snapshot_failure():
+def test_nav_record_service_logs_snapshot_failure_after_nav_write(caplog):
     storage = _storage()
     manager = _manager(storage)
     manager.snapshot_service.persist_holdings_snapshot.side_effect = RuntimeError("snapshot boom")
     service = NavRecordService(manager=manager, storage=storage)
 
-    try:
-        service.record_nav(
-            account="a",
-            valuation=_valuation(),
-            nav_date=date(2026, 3, 19),
-            persist=True,
-        )
-    except RuntimeError as exc:
-        assert "Failed to write holdings_snapshot for 2026-03-19 (a): snapshot boom" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError")
+    result = service.record_nav(
+        account="a",
+        valuation=_valuation(),
+        nav_date=date(2026, 3, 19),
+        persist=True,
+    )
 
-    storage.save_nav.assert_not_called()
+    assert result.date == date(2026, 3, 19)
+    storage.save_nav.assert_called_once()
+    assert result.details["snapshot_persisted"] is False
+    assert result.details["snapshot_status"] == "failed"
+    assert result.details["snapshot_error"] == "snapshot boom"
+    manager._record_compensation.assert_called_once()
+    assert manager._record_compensation.call_args.kwargs["operation_type"] == "NAV_HOLDINGS_SNAPSHOT_FAILED"
+    assert "holdings_snapshot write failed for 2026-03-19 (a): snapshot boom" in caplog.text
+
+
+def test_portfolio_skill_record_nav_surfaces_snapshot_partial_failure():
+    nav_record = NAVHistory(
+        date=date(2026, 3, 19),
+        account="a",
+        total_value=1200.0,
+        nav=1.2,
+        shares=1000.0,
+        details={
+            "snapshot_persisted": False,
+            "snapshot_status": "failed",
+            "snapshot_error": "snapshot boom",
+        },
+    )
+    skill = PortfolioSkill.__new__(PortfolioSkill)
+    skill.account = "a"
+    skill.portfolio = Mock()
+    skill.portfolio.record_nav.return_value = nav_record
+
+    result = skill.record_nav(
+        snapshot={"valuation": _valuation(), "snapshot_time": "2026-03-19T12:00:00"},
+        dry_run=False,
+        confirm=True,
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "partial"
+    assert result["snapshot_persisted"] is False
+    assert result["snapshot_error"] == "snapshot boom"
+    assert result["nav"] == 1.2
 
 
 def test_portfolio_manager_record_nav_delegates_to_service():

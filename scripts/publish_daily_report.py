@@ -29,6 +29,13 @@ class PublishConfig:
     publish_base_url: Optional[str] = None
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value in ("1", "true", "TRUE", "yes", "YES")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Record NAV, render daily report HTML, and publish it to a static directory.")
     parser.add_argument("--account", default=None, help="Account to operate on. Defaults to config/PORTFOLIO_ACCOUNT.")
@@ -52,10 +59,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--sync-futu-dry-run",
+        dest="sync_futu_dry_run",
         action="store_true",
-        default=os.environ.get("PM_SYNC_FUTU_DRY_RUN") in ("1", "true", "TRUE", "yes", "YES"),
-        help="Preview Futu cash/MMF sync without writing holdings.",
+        help="Preview Futu cash/MMF sync without writing holdings (default).",
     )
+    parser.add_argument(
+        "--sync-futu-write",
+        dest="sync_futu_dry_run",
+        action="store_false",
+        help="Actually write Futu cash/MMF holdings when --sync-futu-cash-mmf is set.",
+    )
+    parser.set_defaults(sync_futu_dry_run=env_flag("PM_SYNC_FUTU_DRY_RUN", True))
     return parser.parse_args()
 
 
@@ -131,7 +145,7 @@ def build_report_data(
     dry_run: bool = False,
     use_bulk_nav_upsert: bool = False,
     sync_futu_cash_mmf: bool = False,
-    sync_futu_dry_run: bool = False,
+    sync_futu_dry_run: bool = True,
     account: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build a consistent bundle for publishing.

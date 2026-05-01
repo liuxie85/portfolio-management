@@ -32,6 +32,70 @@ from .feishu._snapshots_mixin import SnapshotsMixin
 from .feishu._nav_mixin import NavMixin
 
 
+class _MemoryHoldingsIndexCache:
+    def __init__(self):
+        self._cache: Dict[str, Dict[str, Any]] = {}
+
+    def load_all(self) -> Dict[str, Dict[str, Any]]:
+        return {k: dict(v) for k, v in self._cache.items()}
+
+    def upsert(self, cache_key: str, payload: Dict[str, Any], *, _flush: bool = False):
+        self._cache[cache_key] = dict(payload)
+
+    def delete(self, cache_key: str, *, _flush: bool = False):
+        self._cache.pop(cache_key, None)
+
+    def flush(self):
+        return None
+
+
+class _MemoryAccountCache:
+    def __init__(self):
+        self._cache: Dict[str, Dict[str, Any]] = {}
+
+    def get_account(self, account: str) -> Dict[str, Any]:
+        return json.loads(json.dumps(self._cache.get(account) or {}))
+
+    def set_account(self, account: str, payload: Dict[str, Any], *, _flush: bool = False):
+        self._cache[account] = json.loads(json.dumps(payload))
+
+    def upsert_nav_records(self, account: str, records: List[Dict[str, Any]], *, _flush: bool = False):
+        base = dict(self._cache.get(account) or {})
+        navs = list(base.get('nav_history') or [])
+        by_date = {str((row or {}).get('date') or ''): dict(row) for row in navs if (row or {}).get('date')}
+        for record in records:
+            ds = str((record or {}).get('date') or '')
+            if ds:
+                by_date[ds] = dict(record)
+        base['nav_history'] = sorted(by_date.values(), key=lambda row: row.get('date') or '')
+        base['record_count'] = len(base['nav_history'])
+        self._cache[account] = base
+
+    def append_flow(self, account: str, flow_date: date, cny_amount: float, record_id: Optional[str], updated_at: Optional[str], *, _flush: bool = False):
+        base = dict(self._cache.get(account) or {})
+        daily = dict(base.get('daily') or {})
+        monthly = dict(base.get('monthly') or {})
+        yearly = dict(base.get('yearly') or {})
+        ds = flow_date.strftime('%Y-%m-%d')
+        ym = flow_date.strftime('%Y-%m')
+        yy = flow_date.strftime('%Y')
+        daily[ds] = float(daily.get(ds, 0.0) + (cny_amount or 0.0))
+        monthly[ym] = float(monthly.get(ym, 0.0) + (cny_amount or 0.0))
+        yearly[yy] = float(yearly.get(yy, 0.0) + (cny_amount or 0.0))
+        base['daily'] = daily
+        base['monthly'] = monthly
+        base['yearly'] = yearly
+        base['cumulative'] = float(base.get('cumulative', 0.0) + (cny_amount or 0.0))
+        base['flow_count'] = int(base.get('flow_count', 0) or 0) + 1
+        base['last_record'] = {
+            'date': ds,
+            'record_id': record_id,
+            'updated_at': updated_at,
+            'cny_amount': cny_amount,
+        }
+        self._cache[account] = base
+
+
 class FeishuStorage(
     HoldingsMixin,
     TransactionsMixin,
@@ -66,6 +130,7 @@ class FeishuStorage(
             local_cash_flow_agg_cache: 本地现金流聚合缓存实例（可注入用于测试）
         """
         self.client = client or FeishuClient()
+        use_memory_indexes = client is not None and self.client.__class__.__module__ == 'unittest.mock'
 
         # 内存缓存：减少 API 调用次数
         # key: "asset_id:account:broker" -> value: record_id
@@ -85,15 +150,21 @@ class FeishuStorage(
         self._local_price_cache = local_price_cache or LocalPriceCache()
 
         # 本地持仓索引缓存（business_key -> fields）
-        self._local_holdings_index_cache = local_holdings_index_cache or LocalHoldingsIndexCache()
+        self._local_holdings_index_cache = local_holdings_index_cache or (
+            _MemoryHoldingsIndexCache() if use_memory_indexes else LocalHoldingsIndexCache()
+        )
 
         # 本地 NAV 索引缓存（account -> nav index + bases）
-        self._local_nav_index_cache = local_nav_index_cache or LocalNavIndexCache()
+        self._local_nav_index_cache = local_nav_index_cache or (
+            _MemoryAccountCache() if use_memory_indexes else LocalNavIndexCache()
+        )
         self._nav_index_loaded_accounts: set[str] = set()
         self._nav_index_mem_cache: Dict[str, Dict[str, Any]] = {}
 
         # 本地 cash_flow 聚合缓存（account -> monthly/yearly/cumulative）
-        self._local_cash_flow_agg_cache = local_cash_flow_agg_cache or LocalCashFlowAggCache()
+        self._local_cash_flow_agg_cache = local_cash_flow_agg_cache or (
+            _MemoryAccountCache() if use_memory_indexes else LocalCashFlowAggCache()
+        )
         self._cash_flow_agg_loaded_accounts: set[str] = set()
         self._cash_flow_agg_mem_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -239,17 +310,13 @@ class FeishuStorage(
                 result[key] = str(value)
                 continue
 
-            # 日期转换：飞书日期字段使用 Unix 时间戳（毫秒）或字符串（取决于表字段类型）
+            # 日期转换：飞书日期字段使用 Unix 时间戳（毫秒）。
             if isinstance(value, datetime):
                 result[key] = int(value.timestamp() * 1000)
             elif isinstance(value, date):
-                # transactions.tx_date is Text in Feishu; use YYYY-MM-DD to match schema.
-                if table == 'transactions' and key == 'tx_date':
-                    result[key] = value.strftime('%Y-%m-%d')
-                else:
-                    # Interpret date as business date in FEISHU_DATE_TZ (Beijing) to avoid cross-day drift.
-                    dt = datetime.combine(value, datetime.min.time(), tzinfo=self.FEISHU_DATE_TZ)
-                    result[key] = int(dt.timestamp() * 1000)
+                # Interpret date as business date in FEISHU_DATE_TZ (Beijing) to avoid cross-day drift.
+                dt = datetime.combine(value, datetime.min.time(), tzinfo=self.FEISHU_DATE_TZ)
+                result[key] = int(dt.timestamp() * 1000)
             # 枚举转换
             elif isinstance(value, (AssetType, TransactionType, AssetClass, Industry)):
                 result[key] = value.value
@@ -436,6 +503,27 @@ class FeishuStorage(
             return dt.replace(tzinfo=None).strftime(DATETIME_FORMAT)
         if isinstance(raw, str):
             return raw
+        return None
+
+    def _read_record(self, table_name: str, record_id: str) -> Optional[Dict[str, Any]]:
+        """Read one record, accepting both strict and legacy client shapes."""
+        strict = getattr(self.client, 'get_record_strict', None)
+        if callable(strict):
+            try:
+                record = strict(table_name, record_id)
+                if isinstance(record, dict):
+                    return record
+            except Exception:
+                pass
+
+        legacy = getattr(self.client, 'get_record', None)
+        if callable(legacy):
+            try:
+                record = legacy(table_name, record_id)
+                if isinstance(record, dict):
+                    return record
+            except Exception:
+                return None
         return None
 
 

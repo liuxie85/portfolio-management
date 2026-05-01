@@ -56,6 +56,9 @@ def get(key: str, default=None):
     env_map = {
         "account": "PORTFOLIO_ACCOUNT",
         "storage.backend": "PORTFOLIO_STORAGE_BACKEND",
+        "service.host": "PORTFOLIO_SERVICE_HOST",
+        "service.port": "PORTFOLIO_SERVICE_PORT",
+        "service.url": "PORTFOLIO_SERVICE_URL",
         "nav.disable_runtime_validation": "PORTFOLIO_NAV_DISABLE_RUNTIME_VALIDATION",
         "feishu.app_token": "FEISHU_APP_TOKEN",
         "feishu.app_id": "FEISHU_APP_ID",
@@ -125,3 +128,22 @@ def get_data_dir() -> Path:
 def get_storage_backend() -> str:
     """获取存储后端：auto | feishu（兼容历史配置；sqlite 已移除）"""
     return str(get("storage.backend", "auto")).lower()
+
+
+def get_service_host() -> str:
+    """获取本地 HTTP 服务监听地址。"""
+    return str(get("service.host", "127.0.0.1"))
+
+
+def get_service_port() -> int:
+    """获取本地 HTTP 服务端口。"""
+    val = get("service.port", 8765)
+    return int(val)
+
+
+def get_service_url() -> str:
+    """获取本地 HTTP 服务 URL。"""
+    configured = get("service.url")
+    if configured:
+        return str(configured).rstrip("/")
+    return f"http://{get_service_host()}:{get_service_port()}"

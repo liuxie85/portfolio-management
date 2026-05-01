@@ -136,9 +136,8 @@ class TransactionsMixin:
 
     def get_transaction(self, record_id: str) -> Optional[Transaction]:
         """获取单条交易记录（通过 record_id）"""
-        try:
-            record = self.client.get_record_strict('transactions', record_id)
-        except Exception:
+        record = self._read_record('transactions', record_id)
+        if not record:
             return None
 
         fields = self._from_feishu_fields(record['fields'], 'transactions')

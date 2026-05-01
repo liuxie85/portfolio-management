@@ -120,3 +120,46 @@ def test_publish_daily_report_build_report_data_passes_account():
     assert ("record_nav", "alice", True) in calls
     assert ("generate_report", "alice", "daily") in calls
     assert ("get_nav", "alice", 2) in calls
+
+
+def test_publish_daily_report_futu_sync_defaults_to_dry_run():
+    calls = []
+
+    class FakeStorage:
+        def get_nav_history(self, account, days):
+            return []
+
+    class FakeSkill:
+        def __init__(self, account):
+            self.account = account
+            self.storage = FakeStorage()
+
+        def sync_futu_cash_mmf(self, dry_run):
+            calls.append(("sync_futu_cash_mmf", dry_run))
+            return {"success": True, "dry_run": dry_run}
+
+        def build_snapshot(self):
+            return {"valuation": None}
+
+        def record_nav(self, **kwargs):
+            return {"success": True}
+
+        def generate_report(self, **kwargs):
+            return {"success": True, "date": "2026-04-20"}
+
+        def get_nav(self, **kwargs):
+            return {"success": True}
+
+    fake_skill_api = types.SimpleNamespace(
+        get_skill=lambda account=None: FakeSkill(account or "default")
+    )
+    with _SysModulesPatch("skill_api", fake_skill_api):
+        bundle = publish_daily_report.build_report_data(
+            price_timeout=5,
+            dry_run=True,
+            sync_futu_cash_mmf=True,
+            account="alice",
+        )
+
+    assert bundle["futu_sync_result"] == {"success": True, "dry_run": True}
+    assert calls == [("sync_futu_cash_mmf", True)]

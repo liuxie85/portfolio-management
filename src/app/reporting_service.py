@@ -131,7 +131,7 @@ class ReportingService:
             type_dist[normalized_type] = type_dist.get(normalized_type, 0) + market_value
 
             broker = holding.get("broker") or "未指定券商"
-            broker_dist[broker] = broker_dist.get(broker, 0) + market_value
+            market_dist[broker] = market_dist.get(broker, 0) + market_value
 
             currency = holding.get("currency") or "CNY"
             currency_dist[currency] = currency_dist.get(currency, 0) + market_value
@@ -145,10 +145,13 @@ class ReportingService:
         def sort_by_value(items_dict):
             return sorted(items_dict.items(), key=lambda x: x[1], reverse=True)
 
+        by_market = [{"broker": k, "value": v, "ratio": v / total if total > 0 else 0} for k, v in sort_by_value(market_dist)]
+
         return {
             "success": True,
             "total_value": total,
             "by_type": [{"type": k, "value": v, "ratio": v / total if total > 0 else 0} for k, v in sort_by_value(type_dist)],
-            "by_broker": [{"broker": k, "value": v, "ratio": v / total if total > 0 else 0} for k, v in sort_by_value(broker_dist)],
+            "by_market": by_market,
+            "by_broker": by_market,
             "by_currency": [{"currency": k, "value": v, "ratio": v / total if total > 0 else 0} for k, v in sort_by_value(currency_dist)],
         }

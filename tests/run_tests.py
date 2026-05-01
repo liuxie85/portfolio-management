@@ -101,8 +101,26 @@ def main() -> None:
         test_pm_report_requires_preview_flag,
         test_pm_report_preview_marks_noncanonical_output,
         test_pm_cash_passes_account,
+        test_pm_accounts_lists_discovered_accounts,
+        test_pm_overview_passes_accounts_and_timeout,
+        test_pm_cash_prefers_service_when_available,
         test_pm_init_nav_passes_account_and_write_flags,
         test_pm_init_nav_write_requires_confirm,
+    )
+    from tests.test_multi_account import (
+        test_list_accounts_discovers_accounts_across_read_models,
+        test_multi_account_overview_aggregates_successful_accounts,
+    )
+    from tests.test_service_application import (
+        test_portfolio_service_delegates_read_use_cases_to_backend,
+    )
+    from tests.test_service_client import (
+        test_service_client_builds_local_request_urls,
+        test_service_client_marks_unavailable_on_connection_error,
+    )
+    from tests.test_service_http import (
+        test_http_service_routes_delegate_to_portfolio_service,
+        test_http_service_rejects_unknown_report_type,
     )
     from tests.test_daily_report_entrypoints import (
         test_generate_daily_report_html_is_renderer_only,
@@ -153,8 +171,18 @@ def main() -> None:
         test_pm_report_requires_preview_flag,
         test_pm_report_preview_marks_noncanonical_output,
         test_pm_cash_passes_account,
+        test_pm_accounts_lists_discovered_accounts,
+        test_pm_overview_passes_accounts_and_timeout,
+        test_pm_cash_prefers_service_when_available,
         test_pm_init_nav_passes_account_and_write_flags,
         test_pm_init_nav_write_requires_confirm,
+        test_list_accounts_discovers_accounts_across_read_models,
+        test_multi_account_overview_aggregates_successful_accounts,
+        test_portfolio_service_delegates_read_use_cases_to_backend,
+        test_service_client_builds_local_request_urls,
+        test_service_client_marks_unavailable_on_connection_error,
+        test_http_service_routes_delegate_to_portfolio_service,
+        test_http_service_rejects_unknown_report_type,
         test_generate_daily_report_html_is_renderer_only,
         test_publish_daily_report_returns_renderer_bundle_shape,
         test_publish_daily_report_build_report_data_passes_account,

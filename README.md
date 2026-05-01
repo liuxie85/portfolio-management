@@ -6,6 +6,7 @@
 
 - 人类使用：`README.md`、`docs/INDEX.md`
 - Agent 使用：`SKILL.md`
+- HTTP Service：`src/service/http.py`（主服务入口）
 - Python API：`skill_api.py`
 - MCP Server：`mcp_server.py`（供 OpenClaw、Claude Desktop 等 MCP 客户端调用）
 - 架构说明：`docs/architecture.md`
@@ -20,6 +21,19 @@ python3 -m venv .venv
 cp config.example.json config.json
 ```
 
+启动 HTTP 服务：
+
+```bash
+python scripts/service.py start
+python scripts/service.py status
+curl http://127.0.0.1:8765/health
+curl http://127.0.0.1:8765/accounts
+curl 'http://127.0.0.1:8765/accounts/overview?accounts=alice,bob'
+```
+
+HTTP 服务默认只允许绑定 `127.0.0.1`/`localhost`/`::1`。该服务当前不带鉴权；
+如果必须绑定到非 loopback 地址，需要显式传 `--allow-remote`，并确保外层网络边界已鉴权。
+
 配置 `config.json` 或环境变量：
 
 - `FEISHU_APP_ID`
@@ -32,6 +46,7 @@ cp config.example.json config.json
 - `FEISHU_TABLE_HOLDINGS_SNAPSHOT`
 - `FEISHU_TABLE_COMPENSATION_TASKS`
 - `FEISHU_TABLE_SCHEMA_VERSION`
+- `PORTFOLIO_SERVICE_URL`（可选，默认 `http://127.0.0.1:8765`）
 
 ## Linux 部署约定
 
@@ -52,10 +67,13 @@ ln -s /var/lib/portfolio-management/reports ./reports
 ## 常用调用
 
 ```python
-from skill_api import buy, sell, deposit, withdraw, get_holdings, full_report, record_nav, sync_futu_cash_mmf
+from skill_api import buy, sell, deposit, withdraw, get_holdings, full_report, record_nav, sync_futu_cash_mmf, list_accounts, multi_account_overview
 
 get_holdings(include_price=True, group_by_market=True)
 get_holdings(include_price=True, account="alice")
+list_accounts()
+multi_account_overview()
+multi_account_overview(accounts=["alice", "bob"])
 sync_futu_cash_mmf(dry_run=True)
 sync_futu_cash_mmf(dry_run=True, account="alice")
 record_nav()
@@ -71,9 +89,14 @@ withdraw(10000, remark="出金")
 
 日报数据与 HTML 统一从 `scripts/publish_daily_report.py` 生成；`scripts/generate_daily_report_html.py` 仅负责渲染已准备好的 bundle。
 
+HTTP 服务是新的主产品入口；CLI、MCP 和 `skill_api.py` 保持兼容，作为服务/应用层的适配入口逐步收敛。
+`scripts/pm.py` 的只读命令和 MCP 只读工具会优先尝试本地服务，服务不可用时自动回退到直连 `skill_api.py`；CLI 可用 `--no-service` 强制直连，或用 `--require-service` 在服务不可用时直接失败。
+
 常用 CLI 也支持显式指定账户：
 
 ```bash
+python scripts/pm.py accounts --json
+python scripts/pm.py overview --accounts alice,bob --json
 python scripts/pm.py cash --account alice
 python scripts/pm.py holdings --account alice --json
 python scripts/publish_daily_report.py --account alice
@@ -105,13 +128,14 @@ MCP 客户端配置示例：
 }
 ```
 
-共注册 17 个 tools，覆盖交易、持仓、净值、现金、报告、同步等全部功能。写入类操作默认带 `dry_run=True` 安全保护。
+MCP tools 覆盖账户发现、交易、持仓、净值、现金、报告、同步等功能。写入类操作默认带 `dry_run=True` 安全保护。
 
 ## 当前结构
 
 ```text
 src/
 ├── app/                  # 应用服务：交易、现金、富途余额同步、估值、NAV、快照、报表、补偿
+├── service/              # HTTP/service 边界：FastAPI app 与服务门面
 ├── domain/               # 纯计算：NAV 公式、历史索引、payload 规范化
 ├── pricing/              # 行情插件化：PriceService + Provider
 ├── migrations/           # Schema 版本化迁移登记
